@@ -466,15 +466,21 @@ class Range(object):
 
     :param headerval: value of the header as a str
     """
+    #构造函数，将全部字节范围以元组的方式保存到ranges列表中
     def __init__(self, headerval):
         headerval = headerval.replace(' ', '')
+        #如果不是bytes=开头，报错，注释情况1
         if not headerval.lower().startswith('bytes='):
             raise ValueError('Invalid Range header: %s' % headerval)
+        #定义字节范围的列表，最后所有的字节范围都是以元组的形式，保存到该列表中
         self.ranges = []
+        #从bytes=之后开始获取所有的字节范围，
         for rng in headerval[6:].split(','):
             # Check if the range has required hyphen.
+            #如果没有连字符-，报错，注释情况4
             if rng.find('-') == -1:
                 raise ValueError('Invalid Range header: %s' % headerval)
+            #获取单个字节范围
             start, end = rng.split('-', 1)
             if start:
                 # when start contains non numeric value, this also causes
@@ -486,16 +492,21 @@ class Range(object):
                 # when end contains non numeric value, this also causes
                 # ValueError
                 end = int(end)
+                #如果字节范围end小于0，报错
                 if end < 0:
                     raise ValueError('Invalid Range header: %s' % headerval)
+                #如果end小于start，报错，注释情况2
                 elif start is not None and end < start:
                     raise ValueError('Invalid Range header: %s' % headerval)
             else:
                 end = None
+                #如果既没有start，也没有end，报错，注释情况3
                 if start is None:
                     raise ValueError('Invalid Range header: %s' % headerval)
+            #添加字节范围到ranges列表中
             self.ranges.append((start, end))
 
+    #返回所有的字节范围，以字符串形式，比如：bytes=1-5,7-10
     def __str__(self):
         string = 'bytes='
         for i, (start, end) in enumerate(self.ranges):
@@ -508,6 +519,8 @@ class Range(object):
                 string += ','
         return string
 
+    #start代表起始位置，end代表结束为止，该函数的目的是将end加1，因为规范中
+    #说明区间必须是闭包
     def ranges_for_length(self, length):
         """
         This method is used to return multiple ranges for a given length
@@ -591,6 +604,7 @@ class Range(object):
             return []
 
         overlaps = 0
+        #这段代码非常优雅
         for ((start1, end1), (start2, end2)) in pairs(all_ranges):
             if ((start1 < start2 < end1) or (start1 < end2 < end1) or
                (start2 < start1 < end2) or (start2 < end1 < end2)):
@@ -599,6 +613,7 @@ class Range(object):
                     return []
 
         ascending = True
+        #这段代码非常优雅
         for start1, start2 in zip(all_ranges, all_ranges[1:]):
             if start1 > start2:
                 ascending = False
@@ -810,9 +825,10 @@ class Request(object):
     acl = _req_environ_property('swob.ACL')
 
     def __init__(self, environ):
-        self.environ = environ
-        self.headers = HeaderEnvironProxy(self.environ)
+        self.environ = environ                          #environ里面是WSGI的环境变量
+        self.headers = HeaderEnvironProxy(self.environ) #headers存放请求的headers，所有headers以HTTP_开头，并大写
 
+    #通过HTTP请求的参数信息：path、environ、headers、body、可变参数，构建一个Request对象，并返回
     @classmethod
     def blank(cls, path, environ=None, headers=None, body=None, **kwargs):
         """
@@ -829,17 +845,22 @@ class Request(object):
         environ = environ or {}
         if isinstance(path, six.text_type):
             path = path.encode('utf-8')
+        #1、解析URL
         parsed_path = urllib.parse.urlparse(path)
+        #获取服务器名字，如果有网络地址，返回网络地址
         server_name = 'localhost'
         if parsed_path.netloc:
             server_name = parsed_path.netloc.split(':', 1)[0]
 
+        #获取服务端口
         server_port = parsed_path.port
+        #未设置端口，才通过scheme来判断请求的端口
         if server_port is None:
             server_port = {'http': 80,
                            'https': 443}.get(parsed_path.scheme, 80)
         if parsed_path.scheme and parsed_path.scheme not in ['http', 'https']:
             raise TypeError('Invalid scheme: %s' % parsed_path.scheme)
+        #2、生成默认的env，再用参数environ更新
         env = {
             'REQUEST_METHOD': 'GET',
             'SCRIPT_NAME': '',
@@ -856,14 +877,18 @@ class Request(object):
             'wsgi.multiprocess': False
         }
         env.update(environ)
+        #3、如果有参数有请求体body，生成一个WsgiBytesIO字节对象，可以像文件一样操作的内存对象；
         if body is not None:
             env['wsgi.input'] = WsgiBytesIO(body)
             env['CONTENT_LENGTH'] = str(len(body))
         elif 'wsgi.input' not in env:
             env['wsgi.input'] = WsgiBytesIO()
+        #4、生成请求对象req
         req = Request(env)
+        #5、使用参数headers来更新req中的headers字典，会调用响应的setter方法
         for key, val in headers.items():
             req.headers[key] = val
+        #6、使用可变参数更新req的属性变量
         for key, val in kwargs.items():
             prop = getattr(Request, key, None)
             if prop and isinstance(prop, property):
@@ -874,8 +899,10 @@ class Request(object):
                 else:
                     continue
             raise TypeError("got unexpected keyword argument %r" % key)
+        #7、返回req对象
         return req
 
+    #提供查询字符串的字典格式，保存在str_params属性变量
     @property
     def params(self):
         "Provides QUERY_STRING parameters as a dictionary"
@@ -888,6 +915,7 @@ class Request(object):
         return self._params_cache
     str_params = params
 
+    #提供时间戳的属性变量
     @property
     def timestamp(self):
         """
@@ -904,6 +932,7 @@ class Request(object):
                 raise InvalidTimestamp('Invalid X-Timestamp header')
         return self._timestamp
 
+    #提供路径信息属性变量，没有host，但是有查询字符串
     @property
     def path_qs(self):
         """The path of the request, without host but with query string."""
@@ -912,12 +941,14 @@ class Request(object):
             path += '?' + self.query_string
         return path
 
+    #提供完整的请求路径的属性变量，但是不包含查询字符串
     @property
     def path(self):
         "Provides the full path of the request, excluding the QUERY_STRING"
         return urllib.parse.quote(self.environ.get('SCRIPT_NAME', '') +
                                   self.environ['PATH_INFO'])
 
+    #提供实体路径的属性变量
     @property
     def swift_entity_path(self):
         """
@@ -934,6 +965,7 @@ class Request(object):
     def is_chunked(self):
         return is_chunked(self.headers)
 
+    #提供完整请求URL的属性变量
     @property
     def url(self):
         "Provides the full url of the request"
@@ -942,6 +974,9 @@ class Request(object):
     def as_referer(self):
         return self.method + ' ' + self.url
 
+    #将一个路径的一部分从path_info从取出，添加到script_name中，返回path_info中被取出的段
+    #如将path_info = /AUTH_XXXXXXXXXXX/container/object 更新为/container/object，script_name
+    #中添加/AUTH_XXXXXXXXXXXXX
     def path_info_pop(self):
         """
         Takes one path portion (delineated by slashes) from the
@@ -955,10 +990,12 @@ class Request(object):
             slash_loc = path_info.index('/', 1)
         except ValueError:
             slash_loc = len(path_info)
-        self.script_name += path_info[:slash_loc]
-        self.path_info = path_info[slash_loc:]
+        self.script_name += path_info[:slash_loc]   #更新req中属性变量script_name
+        self.path_info = path_info[slash_loc:]      #更新req中属性变量path_info
         return path_info[1:slash_loc]
 
+    #获取一个req的拷贝，并转换为GET请求
+    #用于处理COPY请求，COPY请求需要先发送GET请求获取源数据，再通过PUT请求写入目标文件
     def copy_get(self):
         """
         Makes a copy of the request, converting it to a GET.
@@ -971,6 +1008,7 @@ class Request(object):
         })
         return Request(env)
 
+    #使用请求的env调用application，返回状态、headers、app_iter作为响应
     def call_application(self, application):
         """
         Calls the application with this request's environment.  Returns the
@@ -991,6 +1029,7 @@ class Request(object):
             app_iter = reiterate(app_iter)
         return (captured[0], captured[1], app_iter)
 
+    #调用application，并根据返回值，生成对应的Response对象
     def get_response(self, application):
         """
         Calls the application with this request's environment.  Returns a
@@ -1026,6 +1065,7 @@ class Request(object):
             self.environ.get('SCRIPT_NAME', '') + self.environ['PATH_INFO'],
             minsegs, maxsegs, rest_with_last)
 
+    #获取消息的长度，如果headers中没有包含消息长度，返回None；
     def message_length(self):
         """
         Properly determine the message length for this request. It will return
