@@ -246,6 +246,7 @@ class Application(object):
         """
         return POLICIES.get_object_ring(policy_idx, self.swift_dir)
 
+    #获取请求处理的控制器，并返回路径字典
     def get_controller(self, req):
         """
         Get the controller to handle a request.
@@ -262,14 +263,18 @@ class Application(object):
                      admin_key=self.admin_key)
             return InfoController, d
 
+        #分割路径信息
         version, account, container, obj = split_path(req.path, 1, 4, True)
+        #生成包含version、account、container、object的路径字典，用于返回
         d = dict(version=version,
                  account_name=account,
                  container_name=container,
                  object_name=obj)
         if account and not valid_api_version(version):
             raise APIVersionError('Invalid path')
+        #如果是对象操作
         if obj and container and account:
+            #获取container信息
             info = get_container_info(req.environ, self)
             policy_index = req.headers.get('X-Backend-Storage-Policy-Index',
                                            info['storage_policy'])
@@ -285,13 +290,17 @@ class Application(object):
                 # index - but when there is - it's probably operator
                 # error and hopefully temporary.
                 raise HTTPServiceUnavailable('Unknown Storage Policy')
+            #返回对象操作的控制器对象，以及路径字典
             return self.obj_controller_router[policy], d
+        #如果是container操作，返回container控制器，以及路径字典
         elif container and account:
             return ContainerController, d
+        #如果是account操作，返回account控制器，以及路径字典
         elif account and not container and not obj:
             return AccountController, d
         return None, d
 
+    #WSGI的入口函数，包装env到swob的请求中，并将其传递到底层
     def __call__(self, env, start_response):
         """
         WSGI entry point.
@@ -303,7 +312,9 @@ class Application(object):
         try:
             if self.memcache is None:
                 self.memcache = cache_from_env(env, True)
+            #将env包装为一个swob的请求，并传递给请求处理方法
             req = self.update_request(Request(env))
+            #调用处理请求的方法，处理请求
             return self.handle_request(req)(env, start_response)
         except UnicodeError:
             err = HTTPPreconditionFailed(
@@ -314,12 +325,14 @@ class Application(object):
                            [('Content-Type', 'text/plain')])
             return ['Internal server error.\n']
 
+    #如果请求的headers中有x-storage-token，而没有x-auth-token，则用x-storage-token来代替x-auth-token
     def update_request(self, req):
         if 'x-storage-token' in req.headers and \
                 'x-auth-token' not in req.headers:
             req.headers['x-auth-token'] = req.headers['x-storage-token']
         return req
 
+    #处理请求的入口
     def handle_request(self, req):
         """
         Entry point for proxy server.
@@ -328,23 +341,28 @@ class Application(object):
         :param req: swob.Request object
         """
         try:
+            #设置日志的前缀为proxy-server
             self.logger.set_statsd_prefix('proxy-server')
+            #如果请求长度为负数，报错
             if req.content_length and req.content_length < 0:
                 self.logger.increment('errors')
                 return HTTPBadRequest(request=req,
                                       body='Invalid Content-Length')
 
             try:
+                #如果路径信息不是有效的utf-8编码，报错
                 if not check_utf8(req.path_info):
                     self.logger.increment('errors')
                     return HTTPPreconditionFailed(
                         request=req, body='Invalid UTF8 or contains NULL')
             except UnicodeError:
+                #解码utf-8失败，报错
                 self.logger.increment('errors')
                 return HTTPPreconditionFailed(
                     request=req, body='Invalid UTF8 or contains NULL')
 
             try:
+                #1、根据请求的路径信息，获取对应的控制器对象，并返回路径字典
                 controller, path_parts = self.get_controller(req)
                 p = req.path_info
                 if isinstance(p, six.text_type):
@@ -364,7 +382,9 @@ class Application(object):
 
             self.logger.set_statsd_prefix('proxy-server.' +
                                           controller.server_type.lower())
+            #2、生成控制器对象
             controller = controller(self, **path_parts)
+            #如果没有在请求的env中设置swift.trans_id，那么现在设置
             if 'swift.trans_id' not in req.environ:
                 # if this wasn't set by an earlier middleware, set it now
                 trans_id_suffix = self.trans_id_suffix
@@ -378,6 +398,7 @@ class Application(object):
             controller.trans_id = req.environ['swift.trans_id']
             self.logger.client_ip = get_remote_client(req)
             try:
+                #3、根据请求方法，获取对应的函数指针handler
                 handler = getattr(controller, req.method)
                 getattr(handler, 'publicly_accessible')
             except AttributeError:
@@ -385,6 +406,7 @@ class Application(object):
                 return HTTPMethodNotAllowed(
                     request=req, headers={'Allow': ', '.join(allowed_methods)})
             old_authorize = None
+            #4、如果请求的env中有鉴权方法，调用该鉴权方法，进行鉴权
             if 'swift.authorize' in req.environ:
                 # We call authorize before the handler, always. If authorized,
                 # we remove the swift.authorize hook so isn't ever called
@@ -397,6 +419,7 @@ class Application(object):
                     # No resp means authorized, no delayed recheck required.
                     old_authorize = req.environ['swift.authorize']
                 else:
+                    # 返回resp代表鉴权失败，但是我们可能延迟后重新检查，如果没有设置延迟检查，则返回失败
                     # Response indicates denial, but we might delay the denial
                     # and recheck later. If not delayed, return the error now.
                     if not getattr(handler, 'delay_denial', None):
@@ -406,8 +429,10 @@ class Application(object):
             # method the client actually sent.
             req.environ['swift.orig_req_method'] = req.method
             try:
+                #将鉴权方法从请求的env中取出，以免后续再次调用
                 if old_authorize:
                     req.environ.pop('swift.authorize', None)
+                #5、调用处理请求的方法，处理请求
                 return handler(req)
             finally:
                 if old_authorize:

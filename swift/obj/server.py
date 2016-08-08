@@ -701,6 +701,9 @@ class ObjectController(BaseStorageServer):
 
                 timeout_reader = self._make_timeout_reader(obj_input)
                 try:
+                    #这里面用了一个iter的方式来迭代IO数据，感觉很巧妙，见python API文档中关于iter的介绍
+                    #iter的第一个参数是一个可调用的对象或函数，第二个参数是哨兵
+                    #通过for循环，每次迭代调用可调用的对象或函数，直到遇到哨兵为止
                     for chunk in iter(timeout_reader, ''):
                         start_time = time.time()
                         if start_time > upload_expiration:

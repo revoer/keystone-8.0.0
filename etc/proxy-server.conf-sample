@@ -341,7 +341,7 @@ user_test5_tester5 = testing5 service
 # and to set and read privileged headers such as ACLs.
 # If there are several reseller prefix items, you can prefix the
 # parameter so it applies only to those accounts (for example
-# the parameter SERVICE_operator_roles applies to the /v1/SERVICE_<project>
+# the parameter SERVICE_opplieperator_roles as to the /v1/SERVICE_<project>
 # path). If you omit the prefix, the option applies to all reseller
 # prefix items. For the blank/empty prefix, prefix with '' (do not put
 # underscore after the two single quote characters).

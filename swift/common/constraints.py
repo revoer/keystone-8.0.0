@@ -329,7 +329,7 @@ def check_delete_headers(request):
                                  body='X-Delete-At in past')
     return request
 
-
+#检查字符串是否是有效的utf-8编码，且不包含空字符
 def check_utf8(string):
     """
     Validate if a string is valid UTF-8 str or unicode and that it
