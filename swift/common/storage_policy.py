@@ -87,7 +87,7 @@ class PolicyError(ValueError):
             msg += ', for index %r' % index
         super(PolicyError, self).__init__(msg)
 
-
+# 返回存储策略的字符串object或object-index格式
 def _get_policy_string(base, policy_index):
     if policy_index == 0 or policy_index is None:
         return_string = base
@@ -155,22 +155,30 @@ class BaseStoragePolicy(object):
     actively loaded with :meth:`~StoragePolicy.load_ring`.
     """
 
+    # 策略类型映射到策略类的字典，key是策略类型(字符串)，value是策略类
     policy_type_to_policy_cls = {}
 
     def __init__(self, idx, name='', is_default=False, is_deprecated=False,
                  object_ring=None, aliases=''):
         # do not allow BaseStoragePolicy class to be instantiated directly
+        # 不允许直接初始化BaseStoragePolicy类对象
         if type(self) == BaseStoragePolicy:
             raise TypeError("Can't instantiate BaseStoragePolicy directly")
         # policy parameter validation
+        # 设置存储策略索引index
         try:
             self.idx = int(idx)
         except ValueError:
             raise PolicyError('Invalid index', idx)
         if self.idx < 0:
             raise PolicyError('Invalid index', idx)
+        # 保存存储策略别名的列表
         self.alias_list = []
+
+        # 将name添加到存储策略别名的列表中
         self.add_name(name)
+
+        # 获取配置文件中记录的存储策略别名，并添加到存储策略别名的列表中
         if aliases:
             names_list = list_from_csv(aliases)
             for alias in names_list:
@@ -179,12 +187,15 @@ class BaseStoragePolicy(object):
                 self.add_name(alias)
         self.is_deprecated = config_true_value(is_deprecated)
         self.is_default = config_true_value(is_default)
+
+        # 如果策略类型字符串不在BaseStoragePolicy.policy_type_to_policy_cls字典的keys中，报错
         if self.policy_type not in BaseStoragePolicy.policy_type_to_policy_cls:
             raise PolicyError('Invalid type', self.policy_type)
         if self.is_deprecated and self.is_default:
             raise PolicyError('Deprecated policy can not be default.  '
                               'Invalid config', self.idx)
 
+        # 获取存储策略的字符串object或object-index格式
         self.ring_name = _get_policy_string('object', self.idx)
         self.object_ring = object_ring
 
@@ -201,6 +212,7 @@ class BaseStoragePolicy(object):
     def aliases(self):
         return ", ".join(self.alias_list)
 
+    # 覆盖了整形转化函数，调用int(object)，返回的是存储策略对象的index
     def __int__(self):
         return self.idx
 
@@ -213,6 +225,8 @@ class BaseStoragePolicy(object):
                (self.__class__.__name__, self.idx, self.alias_list,
                 self.is_default, self.is_deprecated, self.policy_type)
 
+    # 注册策略类型(副本或是纠删码，字符串)的装饰器函数，用来装饰策略类
+    # 将各种策略类，存放到BaseStoragePolicy的类变量字典policy_type_to_policy_cls中
     @classmethod
     def register(cls, policy_type):
         """
@@ -227,12 +241,15 @@ class BaseStoragePolicy(object):
                     '%r is already registered for the policy_type %r' % (
                         cls.policy_type_to_policy_cls[policy_type],
                         policy_type))
+            # 保存策略类型对应的策略类，字典
             cls.policy_type_to_policy_cls[policy_type] = policy_cls
+            # 设置策略类的属性policy_type，字符串
             policy_cls.policy_type = policy_type
             return policy_cls
 
         return register_wrapper
 
+    # 类方法，用于将配置文件中的选项名称，映射为存储策略类中的参数名称
     @classmethod
     def _config_options_map(cls):
         """
@@ -246,9 +263,12 @@ class BaseStoragePolicy(object):
             'deprecated': 'is_deprecated',
         }
 
+    # 类方法，生成存储策略类对象，先进行配置文件名称到存储策略类参数名的转换
     @classmethod
     def from_config(cls, policy_index, options):
+        # 获取用于将配置文件中的选项名称，映射为存储策略类中的参数名称的字典
         config_to_policy_option_map = cls._config_options_map()
+        # 用于存放策略选项的字典
         policy_options = {}
         for config_option, value in options.items():
             try:
@@ -260,6 +280,7 @@ class BaseStoragePolicy(object):
             policy_options[policy_option] = value
         return cls(policy_index, **policy_options)
 
+    # 获取存储策略配置属性的字典，如果config为True，返回所有的配置选项，否则，返回部分
     def get_info(self, config=False):
         """
         Return the info dict and conf file options for this policy.
@@ -304,6 +325,7 @@ class BaseStoragePolicy(object):
             msg = 'The name %s is already assigned to this policy.' % name
             raise PolicyError(msg, self.idx)
 
+    # 将name添加到存储策略别名的列表中
     def add_name(self, name):
         """
         Adds an alias name to the storage policy. Shouldn't be called
@@ -316,6 +338,7 @@ class BaseStoragePolicy(object):
         self._validate_policy_name(name)
         self.alias_list.append(name)
 
+    # 将name从存储策略别名的列表中删除
     def remove_name(self, name):
         """
         Removes an alias name from the storage policy. Shouldn't be called
@@ -336,6 +359,7 @@ class BaseStoragePolicy(object):
         else:
             self.alias_list.remove(name)
 
+    # 修改存储策略的主名称
     def change_primary_name(self, name):
         """
         Changes the primary/default name of the policy to a specified name.
@@ -370,6 +394,7 @@ class BaseStoragePolicy(object):
         # Validate ring to make sure it conforms to policy requirements
         self._validate_ring()
 
+    # 法定数量，需要多少个成功的后端请求，才认为是客户端请求被成功处理
     @property
     def quorum(self):
         """
@@ -378,7 +403,9 @@ class BaseStoragePolicy(object):
         """
         raise NotImplementedError()
 
-
+# 注册副本策略类，将副本策略类注册到BaseStoragePolicy类属性字典中
+# 对类进行装饰器，在编译阶段执行
+# 子类没有构造函数，则直接调用父类的构造函数
 @BaseStoragePolicy.register(REPL_POLICY)
 class StoragePolicy(BaseStoragePolicy):
     """
@@ -400,7 +427,8 @@ class StoragePolicy(BaseStoragePolicy):
             raise PolicyError('Ring is not loaded')
         return quorum_size(self.object_ring.replica_count)
 
-
+# 注册纠删码策略类，将纠删码策略类注册到BaseStoragePolicy类属性字典中
+# 对类进行装饰器，在编译阶段执行
 @BaseStoragePolicy.register(EC_POLICY)
 class ECStoragePolicy(BaseStoragePolicy):
     """
@@ -411,6 +439,14 @@ class ECStoragePolicy(BaseStoragePolicy):
     POLICIES from ``swift.conf``.
     """
 
+    # [storage-policy:2]
+    # name = deepfreeze10-4
+    # aliases = df10-4
+    # policy_type = erasure_coding
+    # ec_type = liberasurecode_rs_vand
+    # ec_num_data_fragments = 10
+    # ec_num_parity_fragments = 4
+    # ec_object_segment_size = 1048576
     def __init__(self, idx, name='', aliases='', is_default=False,
                  is_deprecated=False, object_ring=None,
                  ec_segment_size=DEFAULT_EC_OBJECT_SEGMENT_SIZE,
@@ -528,6 +564,7 @@ class ECStoragePolicy(BaseStoragePolicy):
                (super(ECStoragePolicy, self).__repr__(), self.ec_type,
                 self.ec_segment_size, self.ec_ndata, self.ec_nparity)
 
+    # 覆盖了父类的方法，添加了自己独有的配置选项
     @classmethod
     def _config_options_map(cls):
         options = super(ECStoragePolicy, cls)._config_options_map()
@@ -539,6 +576,7 @@ class ECStoragePolicy(BaseStoragePolicy):
         })
         return options
 
+    # 覆盖了父类的方法，获取配置选项
     def get_info(self, config=False):
         info = super(ECStoragePolicy, self).get_info(config=config)
         if not config:
@@ -589,7 +627,7 @@ class ECStoragePolicy(BaseStoragePolicy):
         """
         return self._ec_quorum_size
 
-
+# 有效存储策略的集合类
 class StoragePolicyCollection(object):
     """
     This class represents the collection of valid storage policies for the
@@ -616,12 +654,16 @@ class StoragePolicyCollection(object):
 
     """
 
+    # 构造函数，参数pols为存储策略对象的列表
     def __init__(self, pols):
         self.default = []
+        # 通过别名获取policy对象，key是存储策略别名的大写，value是存储策略对象
         self.by_name = {}
+        # 通过index获取policy对象，key是存储策略index，value是存储策略对象
         self.by_index = {}
         self._validate_policies(pols)
 
+    # 添加存储策略对象
     def _add_policy(self, policy):
         """
         Add pre-validated policies to internal indexes.
@@ -650,7 +692,7 @@ class StoragePolicyCollection(object):
         """
         :param policies: list of policies
         """
-
+        # 遍历所有的存储策略对象，验证并将所有存储策略对象添加到by_index和by_name字典中
         for policy in policies:
             if int(policy) in self.by_index:
                 raise PolicyError('Duplicate index %s conflicts with %s' % (
@@ -666,10 +708,12 @@ class StoragePolicyCollection(object):
                     raise PolicyError(
                         'Duplicate default %s conflicts with %s' % (
                             policy, self.default))
+            # 将所有存储策略对象添加到by_index和by_name字典中
             self._add_policy(policy)
 
         # If a 0 policy wasn't explicitly given, or nothing was
         # provided, create the 0 policy now
+        # 如果没有index为0的存储策略对象，则生成一个，并保存到by_index和by_name字典中
         if 0 not in self.by_index:
             if len(self) != 0:
                 raise PolicyError('You must specify a storage policy '
@@ -678,17 +722,20 @@ class StoragePolicyCollection(object):
             self._add_policy(StoragePolicy(0, name=LEGACY_POLICY_NAME))
 
         # at least one policy must be enabled
+        # 至少有一个存储策略是没有过期的，否则报错
         enabled_policies = [p for p in self if not p.is_deprecated]
         if not enabled_policies:
             raise PolicyError("Unable to find policy that's not deprecated!")
 
         # if needed, specify default
+        # 如果需要，设置一个默认的存储策略
         if not self.default:
             if len(self) > 1:
                 raise PolicyError("Unable to find default policy")
             self.default = self[0]
             self.default.is_default = True
 
+    # 通过名称或别名获取存储策略对象
     def get_by_name(self, name):
         """
         Find a storage policy by its name.
@@ -698,6 +745,7 @@ class StoragePolicyCollection(object):
         """
         return self.by_name.get(name.upper())
 
+    # 通过index获取存储策略对象
     def get_by_index(self, index):
         """
         Find a storage policy by its index.
@@ -738,6 +786,7 @@ class StoragePolicyCollection(object):
             policy.load_ring(swift_dir)
         return policy.object_ring
 
+    # 获取所有存储策略的信息
     def get_policy_info(self):
         """
         Build info about policies for the /info endpoint
@@ -753,6 +802,7 @@ class StoragePolicyCollection(object):
             policy_info.append(policy_entry)
         return policy_info
 
+    # 添加存储策略对象的别名
     def add_policy_alias(self, policy_index, *aliases):
         """
         Adds a new name or names to a policy
@@ -767,9 +817,12 @@ class StoragePolicyCollection(object):
                                   'by policy %s' % (alias,
                                                     self.get_by_name(alias)))
             else:
+                # 添加存储策略对象的别名列表中
                 policy.add_name(alias)
+                # 添加到存储策略对象集合的by_name字典中
                 self.by_name[alias.upper()] = policy
 
+    # 删除存储策略对象的别名
     def remove_policy_alias(self, *aliases):
         """
         Removes a name or names from a policy. If the name removed is the
@@ -787,9 +840,12 @@ class StoragePolicyCollection(object):
                                   'Policies must have at least one name.' % (
                                       policy, alias))
             else:
+                # 从存储策略对象的别名列表中删除
                 policy.remove_name(alias)
+                # 从存储策略对象集合的by_name字典中删除
                 del self.by_name[alias.upper()]
 
+    # 修改存储策略对象的主名称
     def change_policy_primary_name(self, policy_index, new_name):
         """
         Changes the primary or default name of a policy. The new primary
@@ -806,28 +862,45 @@ class StoragePolicyCollection(object):
             raise PolicyError('Other policy %s with name %s exists.' %
                               (self.get_by_name(new_name).idx, new_name))
         else:
+            # 从存储策略对象的别名列表中修改主名称
             policy.change_primary_name(new_name)
+            # 从存储策略对象集合的by_name字典中修改主名称
             self.by_name[new_name.upper()] = policy
 
-
+# 解析swift.conf配置文件，返回StoragePolicyCollection对象
 def parse_storage_policies(conf):
     """
     Parse storage policies in ``swift.conf`` - note that validation
     is done when the :class:`StoragePolicyCollection` is instantiated.
 
+    [storage-policy:2]
+    name = deepfreeze10-4
+    aliases = df10-4
+    policy_type = erasure_coding
+    ec_type = liberasurecode_rs_vand
+    ec_num_data_fragments = 10
+    ec_num_parity_fragments = 4
+    ec_object_segment_size = 1048576
     :param conf: ConfigParser parser object for swift.conf
     """
+    # 存放配置文件中策略对象的列表
     policies = []
     for section in conf.sections():
         if not section.startswith('storage-policy:'):
             continue
+        # 获取策略索引index [storage-policy:2]
         policy_index = section.split(':', 1)[1]
+        # 生成配置项的字典
         config_options = dict(conf.items(section))
+        # 去除policy_type，并返回erasure_coding
         policy_type = config_options.pop('policy_type', DEFAULT_POLICY_TYPE)
+        # 根据policy_type获取对应的存储策略类，这个在编译阶段已经完成字典的赋值
         policy_cls = BaseStoragePolicy.policy_type_to_policy_cls[policy_type]
+        # 生成存储策略对象，并添加policies列表中
         policy = policy_cls.from_config(policy_index, config_options)
         policies.append(policy)
 
+    # 返回StoragePolicyCollection对象，参数是策略对象的列表
     return StoragePolicyCollection(policies)
 
 
@@ -846,11 +919,14 @@ class StoragePolicySingleton(object):
     """
 
     def __iter__(self):
+        # 存储策略对象的迭代器
         return iter(_POLICIES)
 
     def __len__(self):
+        # 存储策略对象的数量
         return len(_POLICIES)
 
+    # 通过index获取存储策略对象
     def __getitem__(self, key):
         return _POLICIES[key]
 
@@ -860,7 +936,7 @@ class StoragePolicySingleton(object):
     def __repr__(self):
         return repr(_POLICIES)
 
-
+# 从swift.conf中读取存储策略信息，生成并返回StoragePolicyCollection对象
 def reload_storage_policies():
     """
     Reload POLICIES from ``swift.conf``.
@@ -869,6 +945,7 @@ def reload_storage_policies():
     policy_conf = ConfigParser()
     policy_conf.read(SWIFT_CONF_FILE)
     try:
+        # 解析swift.conf配置文件，返回StoragePolicyCollection对象
         _POLICIES = parse_storage_policies(policy_conf)
     except PolicyError as e:
         raise SystemExit('ERROR: Invalid Storage Policy Configuration '
@@ -876,6 +953,12 @@ def reload_storage_policies():
 
 
 # parse configuration and setup singleton
+# _POLICIES全局的StoragePolicyCollection对象，这个对象里面存放所有的policy对象，
+# 以及通过index和alias获取policy对象的字典
 _POLICIES = None
+
+# 从swift.conf中读取存储策略信息，生成并返回StoragePolicyCollection对象，保存到全局变量_POLICIES中
 reload_storage_policies()
+
+# 将_POLICIES封装成一个对象，单例模式
 POLICIES = StoragePolicySingleton()

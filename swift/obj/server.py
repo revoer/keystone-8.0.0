@@ -810,16 +810,20 @@ class ObjectController(BaseStorageServer):
     @timing_stats()
     def GET(self, request):
         """Handle HTTP GET requests for the Swift Object Server."""
+        # 根据请求，获取路径信息以及存储策略的元组
         device, partition, account, container, obj, policy = \
             get_name_and_placement(request, 5, 5, True)
         try:
+            #根据策略获取相应策略的文件对象
             disk_file = self.get_diskfile(
                 device, partition, account, container, obj,
                 policy=policy)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
         try:
+            #打开文件对象
             with disk_file.open():
+                #获取文件对象的元数据
                 metadata = disk_file.get_metadata()
                 obj_size = int(metadata['Content-Length'])
                 file_x_ts = Timestamp(metadata['X-Timestamp'])
@@ -830,7 +834,8 @@ class ObjectController(BaseStorageServer):
                 if 'X-Backend-Etag-Is-At' in request.headers:
                     conditional_etag = metadata.get(
                         request.headers['X-Backend-Etag-Is-At'])
-                response = Response(
+                #生成响应对象，传给文件对象读数据迭代器，并设置响应的头信息
+                response =  Response(
                     app_iter=disk_file.reader(keep_cache=keep_cache),
                     request=request, conditional_response=True,
                     conditional_etag=conditional_etag)

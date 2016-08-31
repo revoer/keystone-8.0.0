@@ -87,7 +87,7 @@ def get_listing_content_type(req):
         raise HTTPNotAcceptable(request=req)
     return out_content_type
 
-
+#根据请求，获取路径信息以及存储策略的元组
 def get_name_and_placement(request, minsegs=1, maxsegs=None,
                            rest_with_last=False):
     """
@@ -102,12 +102,14 @@ def get_name_and_placement(request, minsegs=1, maxsegs=None,
     :raises: HTTPServiceUnavailable if the path is invalid or no policy exists
              with the extracted policy_index.
     """
+    #根据请求头，获取后端策略是副本模式，还是EC纠删码模式
     policy_index = request.headers.get('X-Backend-Storage-Policy-Index')
     policy = POLICIES.get_by_index(policy_index)
     if not policy:
         raise HTTPServiceUnavailable(
             body=_("No policy with index %s") % policy_index,
             request=request, content_type='text/plain')
+    #根据请求，获取路径信息的元组
     results = split_and_validate_path(request, minsegs=minsegs,
                                       maxsegs=maxsegs,
                                       rest_with_last=rest_with_last)

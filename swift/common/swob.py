@@ -1182,6 +1182,7 @@ class Response(object):
         else:
             return self.etag
 
+    #为响应多区间做准备
     def _prepare_for_ranges(self, ranges):
         """
         Prepare the Response for multiple ranges.
@@ -1192,6 +1193,7 @@ class Response(object):
         self.content_type = ''.join(['multipart/byteranges;',
                                      'boundary=', self.boundary])
 
+        #计算每个区间的对应的头的固定长度
         # This section calculates the total size of the response.
         section_header_fixed_len = (
             # --boundary\r\n
@@ -1204,6 +1206,7 @@ class Response(object):
             + 2)
 
         body_size = 0
+        #遍历所有的区间，计算总共数据长度
         for start, end in ranges:
             body_size += section_header_fixed_len
 
@@ -1223,6 +1226,7 @@ class Response(object):
         # --boundary-- terminates the message
         body_size += len(self.boundary) + 4
 
+        #设置返回数据的长度，并清空content_range，方便后续调用
         self.content_length = body_size
         self.content_range = None
         return content_size, content_type
@@ -1276,7 +1280,9 @@ class Response(object):
         if self.conditional_response and self.request and \
                 self.request.range and self.request.range.ranges and \
                 not self.content_range:
+            #获取请求的区间范围列表
             ranges = self.request.range.ranges_for_length(self.content_length)
+            #不存在合理的区间范围列表，返回416状态
             if ranges == []:
                 self.status = 416
                 self.content_length = 0
@@ -1287,14 +1293,17 @@ class Response(object):
                 if range_size > 0:
                     # There is at least one valid range in the request, so try
                     # to satisfy the request
+                    #如果仅有一个合理的区间范围
                     if range_size == 1:
                         start, end = ranges[0]
+                        #如果我存在迭代器，且有迭代数据的接口
                         if app_iter and hasattr(app_iter, 'app_iter_range'):
                             self.status = 206
                             self.content_range = content_range_header_value(
                                 start, end, self.content_length)
                             self.content_length = (end - start)
                             return app_iter.app_iter_range(start, end)
+                        #如果没有迭代器，直接从body截取数据
                         elif body:
                             self.status = 206
                             self.content_range = content_range_header_value(
@@ -1393,10 +1402,12 @@ class Response(object):
             you may set ``env['swift.leave_relative_location'] = True``
             in the WSGI environment.
         """
+        #如果没有请求对象，生成请求对象
         if not self.request:
             self.request = Request(env)
         self.environ = env
 
+        # 如果没有响应的迭代器，生成响应迭代器
         if not self.response_iter:
             self.response_iter = self._response_iter(self.app_iter, self._body)
 

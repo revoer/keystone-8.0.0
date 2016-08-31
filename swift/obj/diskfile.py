@@ -465,7 +465,7 @@ def strip_self(f):
         return f(*args, **kwargs)
     return wrapper
 
-
+#类装饰器
 class DiskFileRouter(object):
 
     policy_type_to_manager_cls = {}
@@ -482,16 +482,19 @@ class DiskFileRouter(object):
                     '%r is already registered for the policy_type %r' % (
                         cls.policy_type_to_manager_cls[policy_type],
                         policy_type))
+            #将类保存在Router类的字典中
             cls.policy_type_to_manager_cls[policy_type] = diskfile_cls
             return diskfile_cls
         return register_wrapper
 
     def __init__(self, *args, **kwargs):
+        #存放所有管理对象的字典
         self.policy_to_manager = {}
         for policy in POLICIES:
             manager_cls = self.policy_type_to_manager_cls[policy.policy_type]
             self.policy_to_manager[policy] = manager_cls(*args, **kwargs)
 
+    #通过策略去取响应的对象
     def __getitem__(self, policy):
         return self.policy_to_manager[policy]
 
@@ -1695,6 +1698,7 @@ class BaseDiskFileReader(object):
             os.close(md5_sockfd)
             self.close()
 
+    #迭代数据区间
     def app_iter_range(self, start, stop):
         """
         Returns an iterator over the data file for range (start, stop)
