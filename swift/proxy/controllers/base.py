@@ -1357,6 +1357,7 @@ class Controller(object):
             container_count = int(info['container_count'])
         return partition, nodes, container_count
 
+    # 根据account、container获取container的信息，返回info列表
     def container_info(self, account, container, req=None):
         """
         Get container information and thusly verify container existence.
@@ -1371,11 +1372,14 @@ class Controller(object):
                   and container sync key ('sync_key').
                   Values are set to None if the container does not exist.
         """
+        # 根据ring环获取分区和节点
         part, nodes = self.app.container_ring.get_nodes(account, container)
         if req:
             env = getattr(req, 'environ', {})
         else:
             env = {}
+
+        # 获取container的信息，返回info列表
         info = get_info(self.app, env, account, container)
         if not info:
             info = headers_to_container_info({}, 0)

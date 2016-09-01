@@ -395,6 +395,7 @@ class BaseObjectController(Controller):
         delete_at_part = None
         delete_at_nodes = None
 
+        # 检查并设置定时删除对象的时间格式
         req = constraints.check_delete_headers(req)
 
         if 'x-delete-at' in req.headers:
@@ -404,10 +405,12 @@ class BaseObjectController(Controller):
             req.environ.setdefault('swift.log_info', []).append(
                 'x-delete-at:%s' % x_delete_at)
 
+            # 获取定时删除对象的容器名？？？
             delete_at_container = get_expirer_container(
                 x_delete_at, self.app.expiring_objects_container_divisor,
                 self.account_name, self.container_name, self.object_name)
 
+            # 通过对象ring环，查找定时删除对象所在的分区和节点
             delete_at_part, delete_at_nodes = \
                 self.app.container_ring.get_nodes(
                     self.app.expiring_objects_account, delete_at_container)
@@ -538,6 +541,7 @@ class BaseObjectController(Controller):
         # until copy request handling moves to middleware
         return None, req, data_source, update_response
 
+    # 根据请求头的内容类型或是诊断内容类型，设置请求头的内容类型
     def _update_content_type(self, req):
         # Sometimes the 'content-type' header exists, but is set to None.
         req.content_type_manually_set = True
@@ -545,6 +549,7 @@ class BaseObjectController(Controller):
             config_true_value(req.headers.get('x-detect-content-type'))
         if detect_content_type or not req.headers.get('content-type'):
             guessed_type, _junk = mimetypes.guess_type(req.path_info)
+            # 设置请求头的内容类型，要么是猜的，要么就是默认值'application/octet-stream'
             req.headers['Content-Type'] = guessed_type or \
                 'application/octet-stream'
             if detect_content_type:
@@ -552,6 +557,7 @@ class BaseObjectController(Controller):
             else:
                 req.content_type_manually_set = False
 
+    # 更新请求头中的时间戳信息
     def _update_x_timestamp(self, req):
         # Used by container sync feature
         if 'x-timestamp' in req.headers:
@@ -709,44 +715,59 @@ class BaseObjectController(Controller):
             # Sending an etag with if-none-match isn't currently supported
             return HTTPBadRequest(request=req, content_type='text/plain',
                                   body='If-None-Match only supports *')
+
+        # 1、获取container的信息，保存在container_info列表中
         container_info = self.container_info(
             self.account_name, self.container_name, req)
+
+        # 2、从请求头中获取存储策略的index，如果不存在，默认为存储策略0
         policy_index = req.headers.get('X-Backend-Storage-Policy-Index',
                                        container_info['storage_policy'])
+
+        # 3、根据存储策略index，获取对象的ring环对象
         obj_ring = self.app.get_object_ring(policy_index)
         container_nodes = container_info['nodes']
         container_partition = container_info['partition']
+
+        # 4、通过对象的ring环获取对象所在的分区和节点
         partition, nodes = obj_ring.get_nodes(
             self.account_name, self.container_name, self.object_name)
 
         # pass the policy index to storage nodes via req header
+        # 5、将存储策略index存放在请求头中
         req.headers['X-Backend-Storage-Policy-Index'] = policy_index
         req.acl = container_info['write_acl']
         req.environ['swift_sync_key'] = container_info['sync_key']
 
         # is request authorized
+        # 6、如果请求需要认证，则调用认证接口进行认证
         if 'swift.authorize' in req.environ:
             aresp = req.environ['swift.authorize'](req)
             if aresp:
                 return aresp
 
+        # 这部分判断不应该放在获取container_info之后就先做判断吗？？？
         if not container_info['nodes']:
             return HTTPNotFound(request=req)
 
         # update content type in case it is missing
+        # 7、根据请求头的内容类型或是诊断内容类型，设置请求头的内容类型
         self._update_content_type(req)
 
         # check constraints on object name and request headers
+        # 8、检查对象创建的元数据信息，包括用户自定义的元数据信息
         error_response = check_object_creation(req, self.object_name) or \
             check_content_type(req)
         if error_response:
             return error_response
 
+        # 9、更新请求头中的时间戳信息
         self._update_x_timestamp(req)
 
         # check if request is a COPY of an existing object
         source_header = req.headers.get('X-Copy-From')
         if source_header:
+            # 如果是拷贝请求，处理拷贝请求
             error_response, req, data_source, update_response = \
                 self._handle_copy_request(req)
             if error_response:
@@ -758,19 +779,23 @@ class BaseObjectController(Controller):
                         self.app.client_chunk_size)
                 except (ValueError, IOError) as e:
                     raise ChunkReadError(str(e))
+            # 10、获取数据源的迭代器
             data_source = iter(reader, '')
             update_response = lambda req, resp: resp
 
         # check if object is set to be automatically deleted (i.e. expired)
+        # 11、处理对象定时自动删除
         req, delete_at_container, delete_at_part, \
             delete_at_nodes = self._config_obj_expiration(req)
 
         # add special headers to be handled by storage nodes
+        # 12、添加被存储节点使用的特定头信息，比如更新container所在节点的元数据，所需要的container节点信息
         outgoing_headers = self._backend_requests(
             req, len(nodes), container_partition, container_nodes,
             delete_at_container, delete_at_part, delete_at_nodes)
 
         # send object to storage nodes
+        # 13、发送对象到存储节点
         resp = self._store_object(
             req, data_source, nodes, partition, outgoing_headers)
         return update_response(req, resp)

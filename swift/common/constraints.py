@@ -116,7 +116,7 @@ FORMAT2CONTENT_TYPE = {'plain': 'text/plain', 'json': 'application/json',
 # example) it can be increased with the extra_header_count constraint.
 MAX_HEADER_COUNT = MAX_META_COUNT + 32 + max(EXTRA_HEADER_COUNT, 0)
 
-
+# 检查请求中的用户自定义的元数据
 def check_metadata(req, target_type):
     """
     Check metadata sent in the request headers.  This should only check
@@ -134,18 +134,23 @@ def check_metadata(req, target_type):
     meta_count = 0
     meta_size = 0
     for key, value in req.headers.items():
+        # 如果元数据信息超过8192，报错
         if (isinstance(value, six.string_types)
            and len(value) > MAX_HEADER_SIZE):
 
             return HTTPBadRequest(body='Header value too long: %s' %
                                   key[:MAX_META_NAME_LENGTH],
                                   request=req, content_type='text/plain')
+
+        # 跳过非用户定制的元数据
         if not key.lower().startswith(prefix):
             continue
         key = key[len(prefix):]
         if not key:
             return HTTPBadRequest(body='Metadata name cannot be empty',
                                   request=req, content_type='text/plain')
+
+        # 对account和container，检查用户元数据的key、value是否utf-8编码，失败报错
         bad_key = not check_utf8(key)
         bad_value = value and not check_utf8(value)
         if target_type in ('account', 'container') and (bad_key or bad_value):
@@ -153,19 +158,26 @@ def check_metadata(req, target_type):
                                   request=req, content_type='text/plain')
         meta_count += 1
         meta_size += len(key) + len(value)
+
+        # 用户自定义元数据key超过128字节，报错
         if len(key) > MAX_META_NAME_LENGTH:
             return HTTPBadRequest(
                 body='Metadata name too long: %s%s' % (prefix, key),
                 request=req, content_type='text/plain')
+        # 用户自定义元数据value超过256字节，报错
         elif len(value) > MAX_META_VALUE_LENGTH:
             return HTTPBadRequest(
                 body='Metadata value longer than %d: %s%s' % (
                     MAX_META_VALUE_LENGTH, prefix, key),
                 request=req, content_type='text/plain')
+
+        # 用户自定义元数据数量超过90个，报错
         elif meta_count > MAX_META_COUNT:
             return HTTPBadRequest(
                 body='Too many metadata items; max %d' % MAX_META_COUNT,
                 request=req, content_type='text/plain')
+
+        # 用户自定义元数据总大小超过4096字节，报错
         elif meta_size > MAX_META_OVERALL_SIZE:
             return HTTPBadRequest(
                 body='Total metadata too large; max %d'
@@ -173,7 +185,7 @@ def check_metadata(req, target_type):
                 request=req, content_type='text/plain')
     return None
 
-
+# 检查对象创建的元数据信息，包括用户自定义的元数据信息
 def check_object_creation(req, object_name):
     """
     Check to ensure that everything is alright about an object to be created.
@@ -188,6 +200,7 @@ def check_object_creation(req, object_name):
     :returns HTTPNotImplemented: unsupported transfer-encoding header value
     """
     try:
+        # 获取消息的长度，如果headers中没有包含消息长度，返回None，报错
         ml = req.message_length()
     except ValueError as e:
         return HTTPBadRequest(request=req, content_type='text/plain',
@@ -195,6 +208,8 @@ def check_object_creation(req, object_name):
     except AttributeError as e:
         return HTTPNotImplemented(request=req, content_type='text/plain',
                                   body=str(e))
+
+    # 如果请求消息的长度超过5G，报错
     if ml is not None and ml > MAX_FILE_SIZE:
         return HTTPRequestEntityTooLarge(body='Your request is too large.',
                                          request=req,
@@ -205,28 +220,35 @@ def check_object_creation(req, object_name):
                                   request=req,
                                   content_type='text/plain')
 
+    # 如果请求头中有拷贝源，但没有长度，报错
     if 'X-Copy-From' in req.headers and req.content_length:
         return HTTPBadRequest(body='Copy requests require a zero byte body',
                               request=req, content_type='text/plain')
 
+    # 如果对象名称大于1024字节，报错
     if len(object_name) > MAX_OBJECT_NAME_LENGTH:
         return HTTPBadRequest(body='Object name length of %d longer than %d' %
                               (len(object_name), MAX_OBJECT_NAME_LENGTH),
                               request=req, content_type='text/plain')
 
+    # 如果请求头中没有内容类型，报错
     if 'Content-Type' not in req.headers:
         return HTTPBadRequest(request=req, content_type='text/plain',
                               body='No content type')
 
     try:
+        # 检查请求头中关于对象删除的信息，失败报错
         req = check_delete_headers(req)
     except HTTPException as e:
         return HTTPBadRequest(request=req, body=e.body,
                               content_type='text/plain')
 
+    # 检查内容类型是否为utf-8编码，失败报错
     if not check_utf8(req.headers['Content-Type']):
         return HTTPBadRequest(request=req, body='Invalid Content-Type',
                               content_type='text/plain')
+
+    # 检查请求中的用户自定义的元数据，失败报错
     return check_metadata(req, 'object')
 
 

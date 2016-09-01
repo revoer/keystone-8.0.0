@@ -278,6 +278,7 @@ class Application(object):
             info = get_container_info(req.environ, self)
             policy_index = req.headers.get('X-Backend-Storage-Policy-Index',
                                            info['storage_policy'])
+            #通过index获取存储策略对象
             policy = POLICIES.get_by_index(policy_index)
             if not policy:
                 # This indicates that a new policy has been created,
