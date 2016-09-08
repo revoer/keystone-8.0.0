@@ -64,7 +64,7 @@ def iter_mime_headers_and_bodies(wsgi_input, mime_boundary, read_chunk_size):
         hdrs = parse_mime_headers(file_like)
         yield (hdrs, file_like)
 
-
+# 读取数据并丢弃
 def drain(file_like, read_size, timeout):
     """
     Read and discard any bytes from file_like.
@@ -115,7 +115,9 @@ class ObjectController(BaseStorageServer):
             conf.get('container_update_timeout', 1))
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
         self.client_timeout = int(conf.get('client_timeout', 60))
+        # 磁盘的chunk大小，默认是64K
         self.disk_chunk_size = int(conf.get('disk_chunk_size', 65536))
+        # 网络的chunk大小，默认是64K
         self.network_chunk_size = int(conf.get('network_chunk_size', 65536))
         self.log_requests = config_true_value(conf.get('log_requests', 'true'))
         self.max_upload_time = int(conf.get('max_upload_time', 86400))
@@ -162,8 +164,10 @@ class ObjectController(BaseStorageServer):
         socket._fileobject.default_bufsize = self.network_chunk_size
 
         # Provide further setup specific to an object server implementation.
+        # 进一步初始化
         self.setup(conf)
 
+    # 进一步初始化
     def setup(self, conf):
         """
         Implementation specific setup. This method is called at the very end
@@ -175,6 +179,7 @@ class ObjectController(BaseStorageServer):
 
         # Common on-disk hierarchy shared across account, container and object
         # servers.
+        # 1、创建从存储策略对象policy到磁盘管理类的映射的路由对象
         self._diskfile_router = DiskFileRouter(conf, self.logger)
         # This is populated by global_conf_callback way below as the semaphore
         # is shared by all workers.
@@ -188,6 +193,7 @@ class ObjectController(BaseStorageServer):
         self.replication_failure_ratio = float(
             conf.get('replication_failure_ratio') or 1.0)
 
+    # 根据存储策略对象policy获取对象的磁盘文件管理对象
     def get_diskfile(self, device, partition, account, container, obj,
                      policy, **kwargs):
         """
@@ -585,16 +591,22 @@ class ObjectController(BaseStorageServer):
     @timing_stats()
     def PUT(self, request):
         """Handle HTTP PUT requests for the Swift Object Server."""
+        # 1、根据请求，获取路径信息以及存储策略对象的元组
         device, partition, account, container, obj, policy = \
             get_name_and_placement(request, 5, 5, True)
         req_timestamp = valid_timestamp(request)
+
+        # 2、检查对象创建的元数据信息，包括用户自定义的元数据信息
         error_response = check_object_creation(request, obj)
         if error_response:
             return error_response
+
+        # 3、获取定时删除对象的时间，比对当前时间，小于当前时间，报错
         new_delete_at = int(request.headers.get('X-Delete-At') or 0)
         if new_delete_at and new_delete_at < time.time():
             return HTTPBadRequest(body='X-Delete-At in past', request=request,
                                   content_type='text/plain')
+        # 4、获取消息的长度，如果headers中没有包含消息长度，返回None；
         try:
             fsize = request.message_length()
         except ValueError as e:
@@ -604,6 +616,8 @@ class ObjectController(BaseStorageServer):
         # In case of multipart-MIME put, the proxy sends a chunked request,
         # but may let us know the real content length so we can verify that
         # we have enough disk space to hold the object.
+        # 5、如果请求中没有指定消息长度，那么就是一个multipart-MIME请求，
+        #    需要告诉我们请求的真实大小，以便我们检验是否有足够的空间存储数据
         if fsize is None:
             fsize = request.headers.get('X-Backend-Obj-Content-Length')
             if fsize is not None:
@@ -616,12 +630,16 @@ class ObjectController(BaseStorageServer):
         # nodes; handoff nodes should 409 subrequests to over-write an
         # existing data fragment until they offloaded the existing fragment
         frag_index = request.headers.get('X-Backend-Ssync-Frag-Index')
+
+        # 7、根据存储策略对象policy获取对象的磁盘文件管理对象
         try:
             disk_file = self.get_diskfile(
                 device, partition, account, container, obj,
                 policy=policy, frag_index=frag_index)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
+
+        # 8、读取磁盘文件对象的元数据，以及时间戳
         try:
             orig_metadata = disk_file.read_metadata()
             orig_timestamp = disk_file.data_timestamp
@@ -635,23 +653,32 @@ class ObjectController(BaseStorageServer):
             orig_timestamp = Timestamp(0)
 
         # Checks for If-None-Match
+        # 9、If-None-Match用于验证客户端缓存数据是否有效
+        #    如果本地文件已经存在，则需要判断If-None-Match中的ETag是否匹配，
+        #    从而检验客户端缓存中的数据是否有效
         if request.if_none_match is not None and orig_metadata:
+            # 如果是"*"，说明任何都匹配，那么认为数据已经存在，返回412
             if '*' in request.if_none_match:
                 # File exists already so return 412
                 return HTTPPreconditionFailed(request=request)
+            # 如果本地的数据ETag没有变化，说明中间没有发生数据改变，则返回412
             if orig_metadata.get('ETag') in request.if_none_match:
                 # The current ETag matches, so return 412
                 return HTTPPreconditionFailed(request=request)
 
+        # 10、如果本地数据的时间戳大于新来请求的时间戳，说明数据过期了，报错
         if orig_timestamp >= req_timestamp:
             return HTTPConflict(
                 request=request,
                 headers={'X-Backend-Timestamp': orig_timestamp.internal})
         orig_delete_at = int(orig_metadata.get('X-Delete-At') or 0)
         upload_expiration = time.time() + self.max_upload_time
+
+        # 11、初始化数据的md5值etag
         etag = md5()
         elapsed_time = 0
         try:
+            # 12、创建写临时文件，并生成写文件对象
             with disk_file.create(size=fsize) as writer:
                 upload_size = 0
 
@@ -664,6 +691,7 @@ class ObjectController(BaseStorageServer):
                 have_metadata_footer = False
                 use_multiphase_commit = False
                 mime_documents_iter = iter([])
+                # 数据输入对象
                 obj_input = request.environ['wsgi.input']
 
                 hundred_continue_headers = []
@@ -699,17 +727,21 @@ class ObjectController(BaseStorageServer):
                     except ChunkReadTimeout:
                         return HTTPRequestTimeout(request=request)
 
+                # 13、获取一个读数据的函数，该函数将传递给迭代器
                 timeout_reader = self._make_timeout_reader(obj_input)
                 try:
                     #这里面用了一个iter的方式来迭代IO数据，感觉很巧妙，见python API文档中关于iter的介绍
                     #iter的第一个参数是一个可调用的对象或函数，第二个参数是哨兵
                     #通过for循环，每次迭代调用可调用的对象或函数，直到遇到哨兵为止
+                    # 14、迭代操作，每次读取chunk大小的数据，并将数据写入临时文件，直到遇到空字符
                     for chunk in iter(timeout_reader, ''):
                         start_time = time.time()
                         if start_time > upload_expiration:
                             self.logger.increment('PUT.timeouts')
                             return HTTPRequestTimeout(request=request)
+                        # 更新数据的MD5值
                         etag.update(chunk)
+                        # 将chunk大小的数据写入临时文件
                         upload_size = writer.write(chunk)
                         elapsed_time += time.time() - start_time
                 except ChunkReadError:
@@ -728,6 +760,7 @@ class ObjectController(BaseStorageServer):
                     footer_meta = self._read_metadata_footer(
                         mime_documents_iter)
 
+                # 14、获取请求中的etag值，与本地接收到的数据的MD5值进行比对，如果不匹配，返回422
                 request_etag = (footer_meta.get('etag') or
                                 request.headers.get('etag', '')).lower()
                 etag = etag.hexdigest()
@@ -751,6 +784,7 @@ class ObjectController(BaseStorageServer):
                     if header_key in request.headers:
                         header_caps = header_key.title()
                         metadata[header_caps] = request.headers[header_key]
+                # 15、将生成对象的元数据保存到后端，这里是数据库中，并刷缓存，将文件移动到目标路径
                 writer.put(metadata)
 
                 # if the PUT requires a two-phase commit (a data and a commit
@@ -764,10 +798,12 @@ class ObjectController(BaseStorageServer):
                     # got 2nd phase confirmation, write a timestamp.durable
                     # state file to indicate a successful PUT
 
+                # 16、两阶段提交的提交操作，对于副本模式，为空操作
                 writer.commit(request.timestamp)
 
                 # Drain any remaining MIME docs from the socket. There
                 # shouldn't be any, but we must read the whole request body.
+                # 17、读取网络数据，并丢弃
                 try:
                     while True:
                         with ChunkReadTimeout(self.client_timeout):
@@ -800,6 +836,7 @@ class ObjectController(BaseStorageServer):
         # apply any container update header overrides sent with request
         self._check_container_override(update_headers, request.headers)
         self._check_container_override(update_headers, footer_meta)
+        # 18、更新container的元数据
         self.container_update(
             'PUT', account, container, obj, request,
             update_headers,
@@ -1135,9 +1172,10 @@ def global_conf_callback(preloaded_app_conf, global_conf):
         global_conf['replication_semaphore'] = [
             multiprocessing.BoundedSemaphore(replication_concurrency)]
 
-
+# 对象服务器的入口
 def app_factory(global_conf, **local_conf):
     """paste.deploy app factory for creating WSGI object server apps"""
     conf = global_conf.copy()
     conf.update(local_conf)
+    # 返回对象控制器对象
     return ObjectController(conf)

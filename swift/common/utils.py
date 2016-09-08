@@ -680,7 +680,7 @@ def fsync_dir(dirpath):
         if dirfd:
             os.close(dirfd)
 
-
+# 清理给定文件的给定区间的缓存
 def drop_buffer_cache(fd, offset, length):
     """
     Drop 'buffer' cache for the given range of the given file.
@@ -1199,7 +1199,7 @@ class RateLimitedIterator(object):
         return next_value
     __next__ = next
 
-
+# 封装了一个线程安全的迭代器，内部有mutex锁保护
 class GreenthreadSafeIterator(object):
     """
     Wrap an iterator to ensure that only one greenthread is inside its next()
@@ -1213,6 +1213,7 @@ class GreenthreadSafeIterator(object):
     """
     def __init__(self, unsafe_iterable):
         self.unsafe_iter = iter(unsafe_iterable)
+        # 生成一个mutex锁，加锁调用acquire，放锁调用release，它是一个上下文管理器，因此可以用于with块中
         self.semaphore = eventlet.semaphore.Semaphore(value=1)
 
     def __iter__(self):
@@ -2511,10 +2512,13 @@ class GreenAsyncPile(object):
         else:
             self._pool = GreenPool(size_or_pool)
             size = size_or_pool
+
+        # 创建一个轻量级的队列
         self._responses = eventlet.queue.LightQueue(size)
         self._inflight = 0
         self._pending = 0
 
+    # 将任务func如队列
     def _run_func(self, func, args, kwargs):
         try:
             self._responses.put(func(*args, **kwargs))
@@ -2525,6 +2529,7 @@ class GreenAsyncPile(object):
     def inflight(self):
         return self._inflight
 
+    # 生成一个绿色线程，并将任务func如队列
     def spawn(self, func, *args, **kwargs):
         """
         Spawn a job in a green thread on the pile.
@@ -2533,6 +2538,7 @@ class GreenAsyncPile(object):
         self._inflight += 1
         self._pool.spawn(self._run_func, func, args, kwargs)
 
+    # 等待第一个结果返回
     def waitfirst(self, timeout):
         """
         Wait up to timeout seconds for first result to come in.
@@ -3308,7 +3314,7 @@ def parse_content_range(content_range):
         raise ValueError("malformed Content-Range %r" % (content_range,))
     return tuple(int(x) for x in found.groups())
 
-
+# 解析content-type和它的参数
 def parse_content_type(content_type):
     """
     Parse a content-type and its parameters into values.
@@ -3614,7 +3620,7 @@ def document_iters_to_multipart_byteranges(ranges_iter, boundary):
         yield "\r\n"
     yield terminator
 
-
+# 返回HTTP的响应body的数据，其实就是从网络读取的数据buf
 def document_iters_to_http_response_body(ranges_iter, boundary, multipart,
                                          logger):
     """
@@ -3655,6 +3661,7 @@ def document_iters_to_http_response_body(ranges_iter, boundary, multipart,
         return document_iters_to_multipart_byteranges(ranges_iter, boundary)
     else:
         try:
+            # 获取真正body数据的迭代器，其实就是已经读取的数据buf
             response_body_iter = next(ranges_iter)['part_iter']
         except StopIteration:
             return ''
@@ -3665,6 +3672,7 @@ def document_iters_to_http_response_body(ranges_iter, boundary, multipart,
         # so if that finally block fires before we read response_body_iter,
         # there's nothing there.
         def string_along(useful_iter, useless_iter_iter, logger):
+            # 循环返回数据
             for x in useful_iter:
                 yield x
 

@@ -262,17 +262,22 @@ class Ring(object):
         """
         return getmtime(self.serialized_path) != self._mtime
 
+    # 获取分区号对应三副本所在的设备信息，返回字典，key是节点信息，value是index
     def _get_part_nodes(self, part):
         part_nodes = []
         seen_ids = set()
+        # 遍历每个副本的part2dev_id
         for r2p2d in self._replica2part2dev_id:
             if part < len(r2p2d):
+                # 通过分区号确定其设备ID
                 dev_id = r2p2d[part]
                 if dev_id not in seen_ids:
+                    # 将设备ID对应的设备信息保存
                     part_nodes.append(self.devs[dev_id])
                     seen_ids.add(dev_id)
         return [dict(node, index=i) for i, node in enumerate(part_nodes)]
 
+    # 获取account、container、object所在分区
     def get_part(self, account, container=None, obj=None):
         """
         Get the partition for an account/container/object.
@@ -288,6 +293,7 @@ class Ring(object):
         part = struct.unpack_from('>I', key)[0] >> self._part_shift
         return part
 
+    # 获取分区号对应三副本所在的设备信息，返回字典，key是节点信息，value是index
     def get_part_nodes(self, part):
         """
         Get the nodes that are responsible for the partition. If one

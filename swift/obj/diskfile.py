@@ -465,7 +465,7 @@ def strip_self(f):
         return f(*args, **kwargs)
     return wrapper
 
-#类装饰器
+#类装饰器，主要提供从存储策略对象policy到磁盘管理类的映射
 class DiskFileRouter(object):
 
     policy_type_to_manager_cls = {}
@@ -1396,6 +1396,7 @@ class BaseDiskFileWriter(object):
     def put_succeeded(self):
         return self._put_succeeded
 
+    # 写chunk大小的数据到临时文件中
     def write(self, chunk):
         """
         Write a chunk of data to disk. All invocations of this method must
@@ -1408,35 +1409,44 @@ class BaseDiskFileWriter(object):
         :returns: the total number of bytes written to an object
         """
 
+        # 1、写数据
         while chunk:
             written = os.write(self._fd, chunk)
             self._upload_size += written
             chunk = chunk[written:]
 
         # For large files sync every 512MB (by default) written
+        # 2、对于大文件，每512MB都进行一次数据同步
         diff = self._upload_size - self._last_sync
         if diff >= self._bytes_per_sync:
+            # 同步缓存数据到磁盘
             tpool_reraise(fdatasync, self._fd)
+            # 清理给定文件的给定区间的缓存
             drop_buffer_cache(self._fd, self._last_sync, diff)
             self._last_sync = self._upload_size
 
         return self._upload_size
 
+    # 更新元数据，并移动文件到目标路径
     def _finalize_put(self, metadata, target_path, cleanup):
         # Write the metadata before calling fsync() so that both data and
         # metadata are flushed to disk.
+        # 1、写元数据
         write_metadata(self._fd, metadata)
         # We call fsync() before calling drop_cache() to lower the amount of
         # redundant work the drop cache code will perform on the pages (now
         # that after fsync the pages will be all clean).
+        # 2、刷数据到磁盘
         fsync(self._fd)
         # From the Department of the Redundancy Department, make sure we call
         # drop_cache() after fsync() to avoid redundant work (pages all
         # clean).
+        # 3、清理缓存
         drop_buffer_cache(self._fd, 0, self._upload_size)
         self.manager.invalidate_hash(dirname(self._datadir))
         # After the rename completes, this object will be available for other
         # requests to reference.
+        # 4、移动文件到目标路径
         renamer(self._tmppath, target_path)
         # If rename is successful, flag put as succeeded. This is done to avoid
         # unnecessary os.unlink() of tempfile later. As renamer() has
@@ -1448,6 +1458,7 @@ class BaseDiskFileWriter(object):
             except OSError:
                 logging.exception(_('Problem cleaning up %s'), self._datadir)
 
+    # 更新元数据，并移动文件到目标路径
     def _put(self, metadata, cleanup=True, *a, **kw):
         """
         Helper method for subclasses.
@@ -1473,6 +1484,7 @@ class BaseDiskFileWriter(object):
         metadata['name'] = self._name
         target_path = join(self._datadir, filename)
 
+        # 更新元数据，并移动文件到目标路径
         tpool_reraise(self._finalize_put, metadata, target_path, cleanup)
 
     def put(self, metadata):
@@ -2348,8 +2360,11 @@ class BaseDiskFile(object):
                      disk
         :raises DiskFileNoSpace: if a size is specified and allocation fails
         """
+        # 1、临时文件目录不存在，创建之
         if not exists(self._tmpdir):
             mkdirs(self._tmpdir)
+
+        # 2、创建临时文件，返回文件句柄和临时文件绝对路径的元组
         try:
             fd, tmppath = mkstemp(dir=self._tmpdir)
         except OSError as err:
@@ -2358,7 +2373,9 @@ class BaseDiskFile(object):
                 raise DiskFileNoSpace()
             raise
         dfw = None
+
         try:
+            # 3、如果指定了有效的文件大小，预先分配文件大小
             if size is not None and size > 0:
                 try:
                     fallocate(fd, size)
@@ -2366,11 +2383,17 @@ class BaseDiskFile(object):
                     if err.errno in (errno.ENOSPC, errno.EDQUOT):
                         raise DiskFileNoSpace()
                     raise
+
+            # 4、生成磁盘文件写对象
             dfw = self.writer_cls(self._name, self._datadir, fd, tmppath,
                                   bytes_per_sync=self._bytes_per_sync,
                                   diskfile=self)
+
+            # 这里的yield并没有真正的迭代作用，只是将函数分离为两部分
             yield dfw
+
         finally:
+            # 5、关闭文件
             try:
                 os.close(fd)
             except OSError:
@@ -2380,6 +2403,7 @@ class BaseDiskFile(object):
                 #
                 # dfw.put_succeeded is set to True after renamer() succeeds in
                 # DiskFileWriter._finalize_put()
+                # 6、如果写失败，删除临时文件
                 try:
                     os.unlink(tmppath)
                 except OSError:
@@ -2429,6 +2453,7 @@ class DiskFileReader(BaseDiskFileReader):
 
 
 class DiskFileWriter(BaseDiskFileWriter):
+    # 更新元数据，并移动文件到目标路径
     def put(self, metadata):
         """
         Finalize writing the file on disk.

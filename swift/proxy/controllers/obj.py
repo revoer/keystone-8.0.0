@@ -183,23 +183,33 @@ class BaseObjectController(Controller):
 
     def GETorHEAD(self, req):
         """Handle HTTP GET or HEAD requests."""
+        # 1、根据account、container的名称，获取container的信息
         container_info = self.container_info(
             self.account_name, self.container_name, req)
         req.acl = container_info['read_acl']
+
         # pass the policy index to storage nodes via req header
+        # 2、根据请求头中存储策略信息获取存储策略索引index，并根据index获取存储策略对象policy和对象的ring环对象
         policy_index = req.headers.get('X-Backend-Storage-Policy-Index',
                                        container_info['storage_policy'])
         policy = POLICIES.get_by_index(policy_index)
         obj_ring = self.app.get_object_ring(policy_index)
         req.headers['X-Backend-Storage-Policy-Index'] = policy_index
+
+        # 3、如果需要认证，则进行认证
         if 'swift.authorize' in req.environ:
             aresp = req.environ['swift.authorize'](req)
             if aresp:
                 return aresp
+
+        # 4、获取对象所在分区号，全路径hash，加移位操作
         partition = obj_ring.get_part(
             self.account_name, self.container_name, self.object_name)
+
+        # 5、根据ring环和分区号生成对象所在设备信息的迭代器对象
         node_iter = self.app.iter_nodes(obj_ring, partition)
 
+        # 6、获取get或head的相应，真正请求处理流程
         resp = self._reroute(policy)._get_or_head_response(
             req, node_iter, partition, policy)
 
@@ -277,24 +287,37 @@ class BaseObjectController(Controller):
                 delete_at_container, delete_at_part, delete_at_nodes)
             return self._post_object(req, obj_ring, partition, headers)
 
+    # 生成后端请求的headers，除了生成通用请求头外，还需要告诉每个对象节点，需要更新container元数据所在节点信息，
+    # 即将container元数据更新操作均衡分配到object的节点上
+    # n_outgoing：对象存储节点列表
+    # delete_at_partition：定时删除对象所在的container的分区
+    # delete_at_nodes：定时删除对象所在的container的节点
     def _backend_requests(self, req, n_outgoing,
                           container_partition, containers,
                           delete_at_container=None, delete_at_partition=None,
                           delete_at_nodes=None):
+        # 1、丛请求头中获取存储策略索引index，并根据index获取存储策略对象
         policy_index = req.headers['X-Backend-Storage-Policy-Index']
         policy = POLICIES.get_by_index(policy_index)
+
+        # 2、根据对象存储节点列表，生对应的后端通用请求头的列表
         headers = [self.generate_request_headers(req, additional=req.headers)
                    for _junk in range(n_outgoing)]
 
+        # 内部函数，用于更新后端请求头中关于待更新的container的信息
         def set_container_update(index, container):
+            # container所在的分区
             headers[index]['X-Container-Partition'] = container_partition
+            # container所在的节点，以逗号隔开
             headers[index]['X-Container-Host'] = csv_append(
                 headers[index].get('X-Container-Host'),
                 '%(ip)s:%(port)s' % container)
+            # container所在的设备，以逗号隔开
             headers[index]['X-Container-Device'] = csv_append(
                 headers[index].get('X-Container-Device'),
                 container['device'])
 
+        # 3、遍历container的节点，将container元数据更新操作均衡分配到object的节点上
         for i, container in enumerate(containers):
             i = i % len(headers)
             set_container_update(i, container)
@@ -305,10 +328,13 @@ class BaseObjectController(Controller):
         n_updates_needed = min(policy.quorum + 1, n_outgoing)
         container_iter = itertools.cycle(containers)
         existing_updates = len(containers)
+        # 4、如果container的元数据更新节点不够，继续分配？？？？？
         while existing_updates < n_updates_needed:
             set_container_update(existing_updates, next(container_iter))
             existing_updates += 1
 
+        # 5、遍历删除对象所在的container的节点，更新到后端请求头中
+        #    代表：如果对象定时删除后，需要更新元数据的container信息
         for i, node in enumerate(delete_at_nodes or []):
             i = i % len(headers)
 
@@ -410,7 +436,7 @@ class BaseObjectController(Controller):
                 x_delete_at, self.app.expiring_objects_container_divisor,
                 self.account_name, self.container_name, self.object_name)
 
-            # 通过对象ring环，查找定时删除对象所在的分区和节点
+            # 通过container的ring环，查找定时删除对象所在container的分区和节点
             delete_at_part, delete_at_nodes = \
                 self.app.container_ring.get_nodes(
                     self.app.expiring_objects_account, delete_at_container)
@@ -625,23 +651,29 @@ class BaseObjectController(Controller):
         """
         raise NotImplementedError()
 
+    # 建立和存储数据节点的连接，每个后端请求一个连接，返回连接的列表
     def _get_put_connections(self, req, nodes, partition, outgoing_headers,
                              policy, expect):
         """
         Establish connections to storage nodes for PUT request
         """
         obj_ring = policy.object_ring
+        # 封装了一个线程安全的迭代器，内部有mutex锁保护
         node_iter = GreenthreadSafeIterator(
             self.iter_nodes_local_first(obj_ring, partition))
+
+        # 构建一个处理多个IO任务的GreenPile对象，这里是向多个数据节点发送数据的网络IO任务
         pile = GreenPile(len(nodes))
 
         for nheaders in outgoing_headers:
             if expect:
                 nheaders['Expect'] = '100-continue'
+            # 在自己的绿色线程中运行_connect_put_node函数，后面为该函数的参数，结果通过pile.next获取
             pile.spawn(self._connect_put_node, node_iter, partition,
                        req.swift_entity_path, nheaders,
                        self.app.logger.thread_locals)
 
+        # 返回这些已经建立的连接组成的列表
         conns = [conn for conn in pile if conn]
 
         return conns
@@ -711,6 +743,7 @@ class BaseObjectController(Controller):
     @delay_denial
     def PUT(self, req):
         """HTTP PUT request handler."""
+        # 如果有if_none_match，必须带有"*"，If-None-Match只支持"*"
         if req.if_none_match is not None and '*' not in req.if_none_match:
             # Sending an etag with if-none-match isn't currently supported
             return HTTPBadRequest(request=req, content_type='text/plain',
@@ -904,8 +937,10 @@ class BaseObjectController(Controller):
 class ReplicatedObjectController(BaseObjectController):
 
     def _get_or_head_response(self, req, node_iter, partition, policy):
+        # 根据存储策略index获取ring环对象，从而获取副本个数
         concurrency = self.app.get_object_ring(policy.idx).replica_count \
             if self.app.concurrent_gets else 1
+        # 调用父类的方法进行请求处理
         resp = self.GETorHEAD_base(
             req, _('Object'), node_iter, partition,
             req.swift_entity_path, concurrency)
@@ -1049,6 +1084,11 @@ class ReplicatedObjectController(BaseObjectController):
             self.app.logger.increment('client_disconnects')
             raise HTTPClientDisconnect(request=req)
 
+    # req：来自HTTP的原始请求
+    # data_source：来自HTTP请求的数据源迭代器
+    # nodes：对象所在的节点
+    # nodes：对象所在的分区
+    # outgoing_headers：发送到后端的请求头
     def _store_object(self, req, data_source, nodes, partition,
                       outgoing_headers):
         """
@@ -1059,6 +1099,7 @@ class ReplicatedObjectController(BaseObjectController):
         nodes. After sending the data, the "best" response will be
         returned based on statuses from all connections
         """
+        # 1、获取请求头中的存储策略index，并根据index获取存储策略对象policy
         policy_index = req.headers.get('X-Backend-Storage-Policy-Index')
         policy = POLICIES.get_by_index(policy_index)
         if not nodes:
@@ -1069,6 +1110,7 @@ class ReplicatedObjectController(BaseObjectController):
             expect = True
         else:
             expect = False
+        # 2、建立和存储数据节点的连接，每个后端请求一个连接，返回连接的列表
         conns = self._get_put_connections(req, nodes, partition,
                                           outgoing_headers, policy, expect)
         min_conns = quorum_size(len(nodes))
@@ -1078,14 +1120,17 @@ class ReplicatedObjectController(BaseObjectController):
             self._check_failure_put_connections(conns, req, nodes, min_conns)
 
             # transfer data
+            # 3、传输数据到数据节点
             self._transfer_data(req, data_source, conns, nodes)
 
             # get responses
+            # 4、 收集发出请求的响应
             statuses, reasons, bodies, etags = self._get_put_responses(
                 req, conns, nodes)
         except HTTPException as resp:
             return resp
         finally:
+            # 5、 关闭与数据节点的连接
             for conn in conns:
                 conn.close()
 
@@ -1094,6 +1139,7 @@ class ReplicatedObjectController(BaseObjectController):
                 _('Object servers returned %s mismatched etags'), len(etags))
             return HTTPServerError(request=req)
         etag = etags.pop() if len(etags) else None
+        # 6、 获取最好的响应信息
         resp = self.best_response(req, statuses, reasons, bodies,
                                   _('Object PUT'), etag=etag)
         resp.last_modified = math.ceil(

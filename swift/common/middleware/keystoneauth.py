@@ -267,6 +267,7 @@ class KeystoneAuth(object):
     def _get_account_name(self, prefix, tenant_id):
         return '%s%s' % (prefix, tenant_id)
 
+    # 检查account的名称是否与租户匹配，account的名称是由AUTH_tenant_id构成
     def _account_matches_tenant(self, account, tenant_id):
         """Check if account belongs to a project/tenant"""
         for prefix in self.reseller_prefixes:
@@ -330,13 +331,18 @@ class KeystoneAuth(object):
         if new_id is not None:
             req.headers[PROJECT_DOMAIN_ID_SYSMETA_HEADER] = new_id
 
+    # 验证ACL
     def _is_name_allowed_in_acl(self, req, path_parts, identity):
+        # 如果没有在acl中设置允许的名称，返回false
         if not self.allow_names_in_acls:
             return False
+
+        # 如果用户的域ID与配置文件中的不符，返回false
         user_domain_id = identity['user_domain'][0]
         if user_domain_id and user_domain_id != self.default_domain_id:
             return False
 
+        # 如果租户的域ID与配置文件中的不符，返回false
         proj_domain_id = identity['project_domain'][0]
         if proj_domain_id and proj_domain_id != self.default_domain_id:
             return False
@@ -344,17 +350,21 @@ class KeystoneAuth(object):
         # request user and scoped project are both in default domain
         tenant_id, tenant_name = identity['tenant']
         version, account, container, obj = path_parts
+        # 检查account的名称是否与租户匹配，account的名称是由AUTH_tenant_id构成，匹配返回true
         if self._account_matches_tenant(account, tenant_id):
             # account == scoped project, so account is also in default domain
             allow = True
         else:
             # retrieve account project domain id from account sysmeta
+            # 从account的系统元数据中获取租户的域ID，如果是配置文件中的域ID，返回true
             exists, acc_domain_id = self._get_project_domain_id(req.environ)
             allow = exists and acc_domain_id in [self.default_domain_id, None]
         if allow:
             self.logger.debug("Names allowed in acls.")
         return allow
 
+    # 检查跨租户的ACL访问，成功返回匹配的字符串，失败返回None
+    # allow_names：是否允许使用名称进行ACL验证
     def _authorize_cross_tenant(self, user_id, user_name,
                                 tenant_id, tenant_name, roles,
                                 allow_names=True):
@@ -377,9 +387,11 @@ class KeystoneAuth(object):
         """
         tenant_match = [tenant_id, '*']
         user_match = [user_id, '*']
+        # 如果允许使用名称进行验证，则添加名称到带匹配的列表中
         if allow_names:
             tenant_match = tenant_match + [tenant_name]
             user_match = user_match + [user_name]
+        # 如果租户：用户匹配给定的ACL，返回匹配字符串
         for tenant in tenant_match:
             for user in user_match:
                 s = '%s:%s' % (tenant, user)
@@ -394,6 +406,7 @@ class KeystoneAuth(object):
 
         tenant_id, tenant_name = env_identity['tenant']
         user_id, user_name = env_identity['user']
+        # 解析标准的ACL字符串，返回referrers的列表和groups的列表
         referrers, roles = swift_acl.parse_acl(getattr(req, 'acl', None))
 
         # allow OPTIONS requests to proceed as normal
@@ -401,6 +414,7 @@ class KeystoneAuth(object):
             return
 
         try:
+            # 获取account、container和object的名称字符串
             part = req.split_path(1, 4, True)
             version, account, container, obj = part
         except ValueError:
@@ -414,6 +428,7 @@ class KeystoneAuth(object):
 
         # Give unconditional access to a user with the reseller_admin
         # role.
+        # 给与reseller_admin角色以无条件访问的权限
         if self.reseller_admin_role in user_roles:
             msg = 'User %s has reseller admin authorizing'
             self.logger.debug(msg, tenant_id)
@@ -422,6 +437,7 @@ class KeystoneAuth(object):
 
         # If we are not reseller admin and user is trying to delete its own
         # account then deny it.
+        # 如果不是reseller_admin角色，而试图删除一个account，拒绝并报错
         if not container and not obj and req.method == 'DELETE':
             # User is not allowed to issue a DELETE on its own account
             msg = 'User %s:%s is not allowed to delete its own account'
@@ -431,7 +447,9 @@ class KeystoneAuth(object):
         # cross-tenant authorization
         matched_acl = None
         if roles:
+            # 是否允许使用名称进行ACL验证
             allow_names = self._is_name_allowed_in_acl(req, part, env_identity)
+            # 检查跨租户的ACL访问，成功返回匹配的字符串，失败返回None
             matched_acl = self._authorize_cross_tenant(user_id, user_name,
                                                        tenant_id, tenant_name,
                                                        roles, allow_names)

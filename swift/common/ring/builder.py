@@ -99,6 +99,8 @@ class RingBuilder(object):
         # many circumstances. Making one big 2**23 * 3 array didn't seem to
         # have any speed change; though you're welcome to try it again (it was
         # a while ago, code-wise, when I last tried it).
+        # _replica2part2dev将副本数量映射到分区，再映射到设备ID。因此，对于3副本，2**23的ring，
+        # 它是一个有三个设备ID的2**23 arrays构成
         self._replica2part2dev = None
 
         # _last_part_moves is an array of unsigned bytes representing
@@ -145,6 +147,10 @@ class RingBuilder(object):
         elapsed_seconds = int(time() - self._last_part_moves_epoch)
         return max((self.min_part_hours * 3600) - elapsed_seconds, 0)
 
+    # 计算并获取一个分区的权重（weight）；
+    # 从所有设备的总权重（weight）中，返回计算出来的每一个分区的权重（weight）；
+    # 计算方法就是将partition数目乘以副本数得到总的partition数目，然后除以现有dev的weight总和，得到每个partition的权重；
+    # 实际上得到的是单位权重对应的partition数目；
     def weight_of_one_part(self):
         """
         Returns the weight of each partition as calculated from the
@@ -164,6 +170,7 @@ class RingBuilder(object):
         b.copy_from(builder_data)
         return b
 
+    # 从builder字典中获取数据，重新初始化RingBuilder对象实例
     def copy_from(self, builder):
         """
         Reinitializes this RingBuilder instance from data obtained from the
@@ -190,14 +197,19 @@ class RingBuilder(object):
             self._last_part_gather_start = builder._last_part_gather_start
             self._remove_devs = builder._remove_devs
         else:
+            # 分区的幂
             self.part_power = builder['part_power']
+            # 副本个数
             self.replicas = builder['replicas']
             self.min_part_hours = builder['min_part_hours']
+            # 分区个数，对应虚拟节点数
             self.parts = builder['parts']
+            # 设备信息，包括端口、zone、权重、ip、region、设备id、设备名称等信息
             self.devs = builder['devs']
             self.devs_changed = builder['devs_changed']
             self.overload = builder.get('overload', 0.0)
             self.version = builder['version']
+            # 副本到分区(虚拟节点)再到设备的映射
             self._replica2part2dev = builder['_replica2part2dev']
             self._last_part_moves_epoch = builder['_last_part_moves_epoch']
             self._last_part_moves = builder['_last_part_moves']
@@ -218,6 +230,7 @@ class RingBuilder(object):
     def __deepcopy__(self, memo):
         return type(self).from_dict(deepcopy(self.to_dict(), memo))
 
+    # 生成RingBuilder对象属性的字典，用于序列化存储到磁盘
     def to_dict(self):
         """
         Returns a dict that can be used later with copy_from to
@@ -278,6 +291,7 @@ class RingBuilder(object):
     def set_overload(self, overload):
         self.overload = overload
 
+    # 获取ring环数据RingData的对象实例，保存在内存中，单例模式
     def get_ring(self):
         """
         Get the ring, or more specifically, the swift.common.ring.RingData.
@@ -292,6 +306,7 @@ class RingBuilder(object):
             # Make devs list (with holes for deleted devices) and not including
             # builder-specific extra attributes.
             devs = [None] * len(self.devs)
+            # 生成devs的字典，key是设备ID，value是设备属性信息
             for dev in self._iter_devs():
                 devs[dev['id']] = dict((k, v) for k, v in dev.items()
                                        if k not in ('parts', 'parts_wanted'))
@@ -299,15 +314,18 @@ class RingBuilder(object):
             # information, and the part_shift value (the number of bits to
             # shift an unsigned int >I right to obtain the partition for the
             # int).
+            # 生成ring环数据RingData的对象实例
             if not self._replica2part2dev:
                 self._ring = RingData([], devs, 32 - self.part_power)
             else:
                 self._ring = \
+                    # array数组的开头是'H'，后面跟着p2d
                     RingData([array('H', p2d) for p2d in
                               self._replica2part2dev],
                              devs, 32 - self.part_power)
         return self._ring
 
+    # 添加一个设备到ring环，返回设备ID，设备信息至少包含ID、权重、region、zone、ip、port、device、meta
     def add_dev(self, dev):
         """
         Add a device to the ring. This device dict should have a minimum of the
@@ -379,6 +397,7 @@ class RingBuilder(object):
         self.devs_changed = True
         self.version += 1
 
+    # 从ring环中移除dev_id对应的设备，实际是添加到_remove_devs列表中
     def remove_dev(self, dev_id):
         """
         Remove a device from the ring.
@@ -664,6 +683,7 @@ class RingBuilder(object):
             return dev_usage, worst
         return None, None
 
+    # 构建一个从设备ID到balance的字典，balance代表它拥有的分区，和想要的分区之前的不同比例
     def _build_balance_per_dev(self):
         """
         Build a map of <device_id> => <balance> where <balance> is a float
@@ -673,6 +693,10 @@ class RingBuilder(object):
         N.B. this method only considers a device's weight and the parts
         assigned, not the parts wanted according to the replica plan.
         """
+        # 计算并获取一个分区的权重（weight）；
+        # 从所有设备的总权重（weight）中，返回计算出来的每一个分区的权重（weight）；
+        # 计算方法就是将partition数目乘以副本数得到总的partition数目，然后除以现有dev的weight总和，得到每个partition的权重；
+        # 实际上得到的是单位权重对应的partition数目；
         weight_of_one_part = self.weight_of_one_part()
         balance_per_dev = {}
         for dev in self._iter_devs():
@@ -685,6 +709,9 @@ class RingBuilder(object):
                 else:
                     balance = 0
             else:
+                # 计算blance的值；
+                # dev['parts']表示目前所存在的partitions的数目；
+                # dev['weight'] * weight_of_one_part表示的是根据dev['weight']计算出来的此device所需要的partitions的数目；
                 balance = 100.0 * dev['parts'] / (
                     dev['weight'] * weight_of_one_part) - 100.0
             balance_per_dev[dev['id']] = balance
@@ -1598,6 +1625,7 @@ class RingBuilder(object):
             for part in range(len(part2dev)):
                 yield (part, replica)
 
+    # 读取builder_file文件，生成RingBuilder对象实例
     @classmethod
     def load(cls, builder_file, open=open):
         """
@@ -1606,6 +1634,7 @@ class RingBuilder(object):
         :param builder_file: path to builder file to load
         :return: RingBuilder instance
         """
+        # 1、打开builder_file文件
         try:
             fp = open(builder_file, 'rb')
         except IOError as e:
@@ -1619,6 +1648,7 @@ class RingBuilder(object):
                 raise
         else:
             with fp:
+                # 2、序列化读取builder_file文件到内存字典builder中
                 try:
                     builder = pickle.load(fp)
                 except Exception:
@@ -1626,10 +1656,15 @@ class RingBuilder(object):
                     raise exceptions.UnPicklingError(
                         'Ring Builder file is invalid: %s' % builder_file)
 
+        # 3、如果builder中没有属性devs，则生成RingBuilder对象实例，与文件记录的进行合并
         if not hasattr(builder, 'devs'):
             builder_dict = builder
+            # 生成RingBuilder对象实例
             builder = RingBuilder(1, 1, 1)
+            # 从builder字典中获取数据，重新初始化RingBuilder对象实例
             builder.copy_from(builder_dict)
+
+        # 4、遍历设备列表，设置replication_ip和replication_port的默认值
         for dev in builder.devs:
             # really old rings didn't have meta keys
             if dev and 'meta' not in dev:
@@ -1643,6 +1678,7 @@ class RingBuilder(object):
                     dev.setdefault('replication_port', dev['port'])
         return builder
 
+    # 序列化RingBuilder对象到磁盘
     def save(self, builder_file):
         """Serialize this RingBuilder instance to disk.
 

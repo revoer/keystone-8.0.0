@@ -601,7 +601,7 @@ def close_swift_conn(src):
     except Exception:
         pass
 
-
+#
 def bytes_to_skip(record_size, range_start):
     """
     Assume an object is composed of N records, where the first N-1 are all
@@ -772,6 +772,7 @@ class ResumingGetter(object):
             it = self._get_response_parts_iter(req, node, source)
         return it
 
+    #
     def _get_response_parts_iter(self, req, node, source):
         # Someday we can replace this [mess] with python 3's "nonlocal"
         source = [source]
@@ -785,10 +786,13 @@ class ResumingGetter(object):
 
             # This is safe; it sets up a generator but does not call next()
             # on it, so no IO is performed.
+            # 1、获取一个成功返回对象GET请求的HTTP响应，并把它转换为一个迭代器
+            #    (first-byte, last-byte, length, headers, body-file)
             parts_iter = [
                 http_response_to_document_iters(
                     source[0], read_chunk_size=self.app.object_chunk_size)]
 
+            # 获取迭代器的一项
             def get_next_doc_part():
                 while True:
                     try:
@@ -803,6 +807,7 @@ class ResumingGetter(object):
                         with ChunkReadTimeout(node_timeout):
                             # if StopIteration is raised, it escapes and is
                             # handled elsewhere
+                            # 获取迭代器的一项
                             start_byte, end_byte, length, headers, part = next(
                                 parts_iter[0])
                         return (start_byte, end_byte, length, headers, part)
@@ -825,6 +830,7 @@ class ResumingGetter(object):
                         else:
                             raise StopIteration()
 
+            # 从迭代器中读数据并返回
             def iter_bytes_from_response_part(part_file):
                 nchunks = 0
                 buf = ''
@@ -832,10 +838,12 @@ class ResumingGetter(object):
                 while True:
                     try:
                         with ChunkReadTimeout(node_timeout):
+                            # 从part_file中读取chunk大小的数据，存放到buf中
                             chunk = part_file.read(self.app.object_chunk_size)
                             nchunks += 1
                             buf += chunk
                     except ChunkReadTimeout:
+                        # 如果读取数据超时，只能重新向其它存储节点发HTTP请求了
                         exc_type, exc_value, exc_traceback = exc_info()
                         if self.newest or self.server_type != 'Object':
                             six.reraise(exc_type, exc_value, exc_traceback)
@@ -884,6 +892,7 @@ class ResumingGetter(object):
                                 bytes_used_from_backend += len(buf)
                                 buf = ''
 
+                        # 数据已经读取完毕，返回buf中的数据
                         if not chunk:
                             if buf:
                                 with ChunkWriteTimeout(
@@ -893,6 +902,7 @@ class ResumingGetter(object):
                                 buf = ''
                             break
 
+                        # 如果客户端设置的chunk大小，则每次返回一个客户端chunk大小的数据buf；
                         if client_chunk_size is not None:
                             while len(buf) >= client_chunk_size:
                                 client_chunk = buf[:client_chunk_size]
@@ -901,6 +911,8 @@ class ResumingGetter(object):
                                         self.app.client_timeout):
                                     yield client_chunk
                                 bytes_used_from_backend += len(client_chunk)
+
+                        # 否则直接返回数据buf，并将buf数据清空，准备下次读取
                         else:
                             with ChunkWriteTimeout(self.app.client_timeout):
                                 yield buf
@@ -923,24 +935,32 @@ class ResumingGetter(object):
                         # how blocking our network IO is; the explicit sleep
                         # here simply provides a lower bound on the rate of
                         # trampolining.
+                        # 每读取5个chunk大小的数据，睡一会
                         if nchunks % 5 == 0:
                             sleep()
 
+            # 2、循环，获取迭代器
             part_iter = None
             try:
                 while True:
+                    # 2.1、获取迭代器的一项
                     start_byte, end_byte, length, headers, part = \
                         get_next_doc_part()
+                    # 2.2、
                     self.learn_size_from_content_range(
                         start_byte, end_byte, length)
+                    # 2.3、从迭代器中读数据并返回
                     part_iter = iter_bytes_from_response_part(part)
+                    # 2.4、返回迭代器的一项
                     yield {'start_byte': start_byte, 'end_byte': end_byte,
                            'entity_length': length, 'headers': headers,
                            'part_iter': part_iter}
+                    # 2.5、
                     self.pop_range()
             except StopIteration:
                 req.environ['swift.non_client_disconnect'] = True
             finally:
+                # 2.6、关闭IO流
                 if part_iter:
                     part_iter.close()
 
@@ -961,6 +981,7 @@ class ResumingGetter(object):
             raise
         finally:
             # Close-out the connection as best as possible.
+            # 3、关闭最后第一个成功GET请求的HTTP连接
             if getattr(source[0], 'swift_conn', None):
                 close_swift_conn(source[0])
 
@@ -978,12 +999,14 @@ class ResumingGetter(object):
         else:
             return None
 
+    # 和后端节点node建立http连接，并发送请求，如果响应OK，返回true，其它返回false
     def _make_node_request(self, node, node_timeout, logger_thread_locals):
         self.app.logger.thread_locals = logger_thread_locals
         if node in self.used_nodes:
             return False
         start_node_timing = time.time()
         try:
+            # 1、与后端节点node建立http连接
             with ConnectionTimeout(self.app.conn_timeout):
                 conn = http_connect(
                     node['ip'], node['port'], node['device'],
@@ -993,24 +1016,30 @@ class ResumingGetter(object):
             self.app.set_node_timing(node, time.time() - start_node_timing)
 
             with Timeout(node_timeout):
+                # 2、获取连接的响应
                 possible_source = conn.getresponse()
                 # See NOTE: swift_conn at top of file about this.
-                possible_source.swift_conn = conn
+                possible_source.swif，t_conn = conn
         except (Exception, Timeout):
             self.app.exception_occurred(
                 node, self.server_type,
                 _('Trying to %(method)s %(path)s') %
                 {'method': self.req_method, 'path': self.req_path})
             return False
+
+        # 3.1、如果响应的状态OK
         if self.is_good_source(possible_source):
             # 404 if we know we don't have a synced copy
+            # 如果有没有数据对象，返回404
             if not float(possible_source.getheader('X-PUT-Timestamp', 1)):
                 self.statuses.append(HTTP_NOT_FOUND)
                 self.reasons.append('')
                 self.bodies.append('')
                 self.source_headers.append([])
+                # 关闭http连接
                 close_swift_conn(possible_source)
             else:
+                # 如果使用etag，则进行etag的校验，失败返回false
                 if self.used_source_etag:
                     src_headers = dict(
                         (k.lower(), v) for k, v in
@@ -1025,6 +1054,7 @@ class ResumingGetter(object):
                         self.source_headers.append([])
                         return False
 
+                # 已经获取到对象，则保存信息后，返回true，这时会更新self.sources
                 self.statuses.append(possible_source.status)
                 self.reasons.append(possible_source.reason)
                 self.bodies.append(None)
@@ -1032,6 +1062,7 @@ class ResumingGetter(object):
                 self.sources.append((possible_source, node))
                 if not self.newest:  # one good source is enough
                     return True
+        # 3.2、响应的失败
         else:
             self.statuses.append(possible_source.status)
             self.reasons.append(possible_source.reason)
@@ -1048,6 +1079,7 @@ class ResumingGetter(object):
                      'type': self.server_type})
         return False
 
+    # 与后端进行HTTP请求，并返回第一个请求成功的source和节点，都失败，返回None,None
     def _get_source_and_node(self):
         self.statuses = []
         self.reasons = []
@@ -1055,31 +1087,43 @@ class ResumingGetter(object):
         self.source_headers = []
         self.sources = []
 
+        # 1、封装了一个线程安全的迭代器，内部有mutex锁保护，用于迭代对象所存储的节点
         nodes = GreenthreadSafeIterator(self.node_iter)
 
         node_timeout = self.app.node_timeout
         if self.server_type == 'Object' and not self.newest:
             node_timeout = self.app.recoverable_node_timeout
 
+        # 2、生成一个运行job的绿色线程池对象
         pile = GreenAsyncPile(self.concurrency)
 
+        # 3、遍历所有节点，创建绿色线程，并将任务_make_node_request入队列，向每个节点发送HTTP请求
         for node in nodes:
             pile.spawn(self._make_node_request, node, node_timeout,
                        self.app.logger.thread_locals)
             _timeout = self.app.concurrency_timeout \
                 if pile.inflight < self.concurrency else None
+            # 4、等待第一个结果返回
             if pile.waitfirst(_timeout):
                 break
         else:
             # ran out of nodes, see if any stragglers will finish
             any(pile)
 
+        # 4、如果self.sources不为None，说明有请求成功了
         if self.sources:
+            # 将sources按照响应的时间戳排序
             self.sources.sort(key=lambda s: source_key(s[0]))
+
+            # 获取第一个请求成功的source和节点
             source, node = self.sources.pop()
+
+            # 将其余的sources的后端HTTP连接强行关闭
             for src, _junk in self.sources:
                 close_swift_conn(src)
             self.used_nodes.append(node)
+
+            # 根据第一个源生成头字典
             src_headers = dict(
                 (k.lower(), v) for k, v in
                 source.getheaders())
@@ -1093,11 +1137,14 @@ class ResumingGetter(object):
             self.used_source_etag = src_headers.get(
                 'x-object-sysmeta-ec-etag',
                 src_headers.get('etag', '')).strip('"')
+
+            # 返回第一个请求成功的source和节点
             return source, node
         return None, None
 
 
 class GetOrHeadHandler(ResumingGetter):
+    # 返回一个接收到的网络数据数据的迭代器
     def _make_app_iter(self, req, node, source):
         """
         Returns an iterator over the contents of the source (via its read
@@ -1110,6 +1157,7 @@ class GetOrHeadHandler(ResumingGetter):
         :param node: The node the source is reading from, for logging purposes.
         """
 
+        # 1、解析content-type和它的参数，确定是否是multipart
         ct = source.getheader('Content-Type')
         if ct:
             content_type, content_type_attrs = parse_content_type(ct)
@@ -1117,12 +1165,14 @@ class GetOrHeadHandler(ResumingGetter):
         else:
             is_multipart = False
 
+        # 2、如果是multipart，则获取boundary
         boundary = "dontcare"
         if is_multipart:
             # we need some MIME boundary; fortunately, the object server has
             # furnished one for us, so we'll just re-use it
             boundary = dict(content_type_attrs)["boundary"]
 
+        # 3、生成一个响应数据的迭代器
         parts_iter = self._get_response_parts_iter(req, node, source)
 
         def add_content_type(response_part):
@@ -1130,19 +1180,26 @@ class GetOrHeadHandler(ResumingGetter):
                 HeaderKeyDict(response_part["headers"]).get("Content-Type")
             return response_part
 
+        # 4、返回HTTP的响应body的数据，其实就是从网络读取的数据buf
         return document_iters_to_http_response_body(
             (add_content_type(pi) for pi in parts_iter),
             boundary, is_multipart, self.app.logger)
 
+    # 获取一个有效的respone
     def get_working_response(self, req):
+        # 1、与后端建立HTTP请求连接，并返回第一个请求成功的source和节点，都失败，返回None,None
+        #    这里的source就是一个HTTP请求成功后的响应
         source, node = self._get_source_and_node()
         res = None
+        # 2、如果有一个请求成功，则生成Response对象，并返回；否则，返回None
         if source:
             res = Response(request=req)
             res.status = source.status
             update_headers(res, source.getheaders())
             if req.method == 'GET' and \
                     source.status in (HTTP_OK, HTTP_PARTIAL_CONTENT):
+                # 3、如果GET请求，且状态OK，生成一个读数据app_iter迭代器，保存到响应Respone中
+                # 3、返回一个接收到的网络数据数据的迭代器
                 res.app_iter = self._make_app_iter(req, node, source)
                 # See NOTE: swift_conn at top of file about this.
                 res.swift_conn = source.swift_conn
@@ -1184,7 +1241,10 @@ class NodeIter(object):
         self.ring = ring
         self.partition = partition
 
+        # 获取分区号对应三副本所在的设备信息，返回字典，key是节点信息，value是index
         part_nodes = ring.get_part_nodes(partition)
+
+        # 如果没有设置node_iter，设置其为part_nodes + 隐藏需要处理的设备信息
         if node_iter is None:
             node_iter = itertools.chain(
                 part_nodes, ring.get_more_nodes(partition))
@@ -1194,6 +1254,7 @@ class NodeIter(object):
 
         # Use of list() here forcibly yanks the first N nodes (the primary
         # nodes) from node_iter, so the rest of its values are handoffs.
+        # 切割前N个设备信息，存放在primary_nodes
         self.primary_nodes = self.app.sort_nodes(
             list(itertools.islice(node_iter, num_primary_nodes)))
         self.handoff_iter = node_iter
@@ -1641,6 +1702,7 @@ class Controller(object):
         else:
             self.app.logger.warning('Could not autocreate account %r' % path)
 
+    # 真正处理get或head请求的逻辑
     def GETorHEAD_base(self, req, server_type, node_iter, partition, path,
                        concurrency=1, client_chunk_size=None):
         """
@@ -1655,26 +1717,33 @@ class Controller(object):
         :param client_chunk_size: chunk size for response body iterator
         :returns: swob.Response object
         """
+        # 1、生成后端请求的headers
         backend_headers = self.generate_request_headers(
             req, additional=req.headers)
 
+        # 2、生成get或header处理器对象
         handler = GetOrHeadHandler(self.app, req, self.server_type, node_iter,
                                    partition, path, backend_headers,
                                    concurrency,
                                    client_chunk_size=client_chunk_size)
+
+        # 3、获取一个有效respone
         res = handler.get_working_response(req)
 
+        # 4、如果没有有效的respone：
         if not res:
             res = self.best_response(
                 req, handler.statuses, handler.reasons, handler.bodies,
                 '%s %s' % (server_type, req.method),
                 headers=handler.source_headers)
         try:
+            # 5、缓存account和container的信息和env
             (vrs, account, container) = req.split_path(2, 3)
             _set_info_cache(self.app, req.environ, account, container, res)
         except ValueError:
             pass
         try:
+            # 6、缓存对象的env
             (vrs, account, container, obj) = req.split_path(4, 4, True)
             _set_object_info_cache(self.app, req.environ, account,
                                    container, obj, res)
@@ -1682,6 +1751,7 @@ class Controller(object):
             pass
         # if a backend policy index is present in resp headers, translate it
         # here with the friendly policy name
+        # 7、如果响应头中存在存储策略index，则转换为存储策略名称
         if 'X-Backend-Storage-Policy-Index' in res.headers and \
                 is_success(res.status_int):
             policy = \

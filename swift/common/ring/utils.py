@@ -588,7 +588,7 @@ def parse_args(argvish):
                       help="Extra device info (just a string) for change")
     return parser.parse_args(argvish)
 
-
+# 解析参数，返回builder_file和ring_file的元组，builder_file是以.builder结尾，ring_file是以.ring.gz结尾
 def parse_builder_ring_filename_args(argvish):
     first_arg = argvish[1]
     if first_arg.endswith('.ring.gz'):

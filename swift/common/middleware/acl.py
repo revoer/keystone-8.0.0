@@ -181,7 +181,7 @@ def format_acl(version=1, **kwargs):
         return format_acl_v2(kwargs.get('acl_dict'))
     raise ValueError("Invalid ACL version: %r" % version)
 
-
+# 解析标准的ACL字符串，返回referrers的列表和groups的列表
 def parse_acl_v1(acl_string):
     """
     Parses a standard Swift ACL string into a referrers list and groups list.
@@ -225,7 +225,7 @@ def parse_acl_v2(data):
     except ValueError:
         return None
 
-
+# 解析标准的ACL字符串，返回referrers的列表和groups的列表
 def parse_acl(*args, **kwargs):
     """
     Compatibility wrapper to help migrate ACL syntax from version 1 to 2.

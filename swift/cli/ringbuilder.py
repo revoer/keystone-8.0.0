@@ -394,6 +394,12 @@ class Commands(object):
         print('Unknown command: %s' % argv[2])
         exit(EXIT_ERROR)
 
+    # 创建基本的.builder文件，序列化到磁盘以及备份目录中
+    #（1）根据命令初始化类RingBuilder，获取类RingBuilder的实例化对象；
+    #（2）创建用于备份的文件夹'backups'；
+    #（3）使用pickle模块将对象转化为文件保存在磁盘上，以便在需要的时候再读取还原；
+    #     这里具体是把转化为字典格式的builder保存两份，一份写入到建立的文件夹'backups'中的指定文件中，
+    #     一份写入到argv[1]指明的文件中；
     @staticmethod
     def create():
         """
@@ -406,18 +412,24 @@ swift-ring-builder <builder_file> create <part_power> <replicas>
         if len(argv) < 6:
             print(Commands.create.__doc__.strip())
             exit(EXIT_ERROR)
+        # 1、生成RingBuilder对象实例
         builder = RingBuilder(int(argv[3]), float(argv[4]), int(argv[5]))
+
+        # 2、创建备份目录
         backup_dir = pathjoin(dirname(builder_file), 'backups')
         try:
             mkdir(backup_dir)
         except OSError as err:
             if err.errno != EEXIST:
                 raise
+
+        # 3、保存原始数据到备份目录，以及/etc/swift目录中
         builder.save(pathjoin(backup_dir,
                               '%d.' % time() + basename(builder_file)))
         builder.save(builder_file)
         exit(EXIT_SUCCESS)
 
+    # 显示ring和设备内部的信息
     @staticmethod
     def default():
         """
@@ -453,6 +465,7 @@ swift-ring-builder <builder_file>
             builder.overload * 100, builder.overload))
 
         # compare ring file against builder file
+        # 对比ring.gz文件和.builder文件
         if not exists(ring_file):
             print('Ring file %s not found, '
                   'probably it hasn\'t been written yet' % ring_file)
@@ -484,6 +497,10 @@ swift-ring-builder <builder_file>
                        dev['meta']))
         exit(EXIT_SUCCESS)
 
+    # 根据给定条件对设备信息搜索并显示
+    # （1）验证命令行正确性；
+    # （2）调用方法search_devs实现对设备信息的搜索功能；
+    # （3）遍历得到的匹配设备信息，组成输出信息并进行打印输出；
     @staticmethod
     def search():
         """
@@ -585,6 +602,11 @@ swift-ring-builder <builder_file> list_parts
             print('%9d   %7d' % (partition, count))
         exit(EXIT_SUCCESS)
 
+    # 使用给定的信息添加新的设备到ring环；
+    # add操作不会分配partitions到新的设备上，只有运行了'rebalance'命令后，才会进行分区的分配；
+    # 因此，这种机制可以允许我们一次添加多个设备，并只执行一次'rebalance'实现对这些设备的分区分配；
+    # 使用pickle模块将对象转化为文件保存在磁盘上，以便在需要的时候再读取还原；
+    # 这里具体是把转化为字典格式的builder写入到argv[1]指定文件中；
     @staticmethod
     def add():
         """
@@ -613,6 +635,7 @@ swift-ring-builder <builder_file> add
             exit(EXIT_ERROR)
 
         try:
+            # 1、对比已有的ring环数据和新添加的数据
             for new_dev in _parse_add_values(argv[3:]):
                 for dev in builder.devs:
                     if dev is None:
@@ -625,6 +648,7 @@ swift-ring-builder <builder_file> add
                                dev['port'], dev['device']))
                         print("The on-disk ring builder is unchanged.\n")
                         exit(EXIT_ERROR)
+                # 2、对于新添加的设备，添加ring环中，返回设备ID
                 dev_id = builder.add_dev(new_dev)
                 print('Device %s with %s weight got id %s' %
                       (format_device(new_dev), new_dev['weight'], dev_id))
@@ -633,9 +657,12 @@ swift-ring-builder <builder_file> add
             print('The on-disk ring builder is unchanged.')
             exit(EXIT_ERROR)
 
+        # 3、保存到.builder文件中
         builder.save(builder_file)
         exit(EXIT_SUCCESS)
 
+    # 重新设置设备的weight。set_weight操作后，设备上的partition不会重新分配，只有运行了'rebalance'
+    # 命令后才会进行分区的分配。
     @staticmethod
     def set_weight():
         """
@@ -715,6 +742,7 @@ swift-ring-builder <builder_file> set_info
         builder.save(builder_file)
         exit(EXIT_SUCCESS)
 
+    # 移除设备
     @staticmethod
     def remove():
         """
@@ -744,6 +772,7 @@ swift-ring-builder <builder_file> search
             print(parse_search_value.__doc__.strip())
             exit(EXIT_ERROR)
 
+        # 1、参数解析，返回设备列表
         devs = _parse_remove_values(argv[3:])
 
         if not devs:
@@ -760,8 +789,10 @@ swift-ring-builder <builder_file> search
                 print('Aborting device removals')
                 exit(EXIT_ERROR)
 
+        # 2、遍历待移除设备列表，从ring环中移除dev_id对应的设备，实际是添加到_remove_devs列表中
         for dev in devs:
             try:
+                # 从ring环中移除dev_id对应的设备，实际是添加到_remove_devs列表中
                 builder.remove_dev(dev['id'])
             except exceptions.RingBuilderError as e:
                 print('-' * 79)
@@ -778,6 +809,7 @@ swift-ring-builder <builder_file> search
 
             print('%s marked for removal and will '
                   'be removed next rebalance.' % format_device(dev))
+        # 3、保存到.builder文件中
         builder.save(builder_file)
         exit(EXIT_SUCCESS)
 
@@ -825,7 +857,9 @@ swift-ring-builder <builder_file> rebalance [options]
 
         devs_changed = builder.devs_changed
         try:
+            # 1、构建一个从设备ID到balance的字典，balance代表它拥有的分区，和想要的分区之前的不同比例
             last_balance = builder.get_balance()
+            #
             parts, balance, removed_devs = builder.rebalance(seed=get_seed(3))
         except exceptions.RingBuilderError as e:
             print('-' * 79)
@@ -887,6 +921,7 @@ swift-ring-builder <builder_file> rebalance [options]
             print('-' * 79)
             status = EXIT_WARNING
         ts = time()
+        # 保存ring环数据，builder文件两份，一份在备份目录中
         builder.get_ring().save(
             pathjoin(backup_dir, '%d.' % ts + basename(ring_file)))
         builder.save(pathjoin(backup_dir, '%d.' % ts + basename(builder_file)))
@@ -1210,11 +1245,13 @@ def main(arguments=None):
               '            2 = error')
         exit(EXIT_SUCCESS)
 
+    # 1、解析参数，返回builder_file和ring_file的元组，builder_file是以.builder结尾，ring_file是以.ring.gz结尾
     builder_file, ring_file = parse_builder_ring_filename_args(argv)
     if builder_file != argv[1]:
         print('Note: using %s instead of %s as builder file' % (
               builder_file, argv[1]))
 
+    # 2、读取builder_file文件，生成RingBuilder对象实例
     try:
         builder = RingBuilder.load(builder_file)
     except exceptions.UnPicklingError as e:
@@ -1229,6 +1266,7 @@ def main(arguments=None):
               (builder_file, e))
         exit(EXIT_ERROR)
 
+    # 3、生成备份目录
     backup_dir = pathjoin(dirname(builder_file), 'backups')
     try:
         mkdir(backup_dir)
@@ -1240,6 +1278,7 @@ def main(arguments=None):
         command = "default"
     else:
         command = argv[2]
+    # 4、调用运行command中指定的处理ring的方法；
     if argv[0].endswith('-safe'):
         try:
             with lock_parent_directory(abspath(builder_file), 15):
