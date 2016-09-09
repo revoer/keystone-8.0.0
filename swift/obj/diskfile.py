@@ -1710,7 +1710,7 @@ class BaseDiskFileReader(object):
             os.close(md5_sockfd)
             self.close()
 
-    #迭代数据区间
+    # GET请求中有区间指定的情况下，迭代单个数据区间
     def app_iter_range(self, start, stop):
         """
         Returns an iterator over the data file for range (start, stop)
@@ -1723,6 +1723,7 @@ class BaseDiskFileReader(object):
         else:
             length = None
         try:
+            # 这里是使用BaseDiskFileReader类本身的迭代器
             for chunk in self:
                 if length is not None:
                     length -= len(chunk)
@@ -1735,6 +1736,8 @@ class BaseDiskFileReader(object):
             if not self._suppress_file_closing:
                 self.close()
 
+    # GET请求中有区间指定的情况下，迭代多个数据区间
+    # size：真正要读取的数据大小
     def app_iter_ranges(self, ranges, content_type, boundary, size):
         """
         Returns an iterator over the data file for a set of ranges

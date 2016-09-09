@@ -1099,12 +1099,13 @@ def content_range_header_value(start, stop, size):
 def content_range_header(start, stop, size):
     return "Content-Range: " + content_range_header_value(start, stop, size)
 
-
+# 多区间范围的迭代器
 def multi_range_iterator(ranges, content_type, boundary, size, sub_iter_gen):
     for start, stop in ranges:
         yield ''.join(['--', boundary, '\r\n',
                        'Content-Type: ', content_type, '\r\n'])
         yield content_range_header(start, stop, size) + '\r\n\r\n'
+        # 调用单一区间的迭代器
         sub_iter = sub_iter_gen(start, stop)
         for chunk in sub_iter:
             yield chunk
@@ -1182,7 +1183,7 @@ class Response(object):
         else:
             return self.etag
 
-    #为响应多区间做准备
+    # 为响应多区间做准备，设置格式化后的数据大小self.content_length以及self.content_type
     def _prepare_for_ranges(self, ranges):
         """
         Prepare the Response for multiple ranges.
@@ -1279,25 +1280,26 @@ class Response(object):
             return ['']
 
         # 2、特殊情况处理
+        #    conditional_response：表示区间和if-non-match
         if self.conditional_response and self.request and \
                 self.request.range and self.request.range.ranges and \
                 not self.content_range:
-            #获取请求的区间范围列表
+            # 2.1、到这里，代表GET请求有区间范围，获取请求的有效区间范围列表
             ranges = self.request.range.ranges_for_length(self.content_length)
-            #不存在合理的区间范围列表，返回416状态，报错
+            # 2.2、不存在合理的区间范围列表，返回416状态，报错
             if ranges == []:
                 self.status = 416
                 self.content_length = 0
                 close_if_possible(app_iter)
                 return ['']
-            # 存在合理的区间范围
+            # 2.3、存在合理的区间范围
             elif ranges:
                 range_size = len(ranges)
                 # 如果至少有一个合理的区间范围
                 if range_size > 0:
                     # There is at least one valid range in the request, so try
                     # to satisfy the request
-                    # 如果仅有一个合理的区间范围
+                    # 2.3.1、如果仅有一个合理的区间范围
                     if range_size == 1:
                         start, end = ranges[0]
                         # 如果存在应用迭代器，且有迭代数据的接口，则从迭代器中读取数据，网络数据就是这种方式
@@ -1314,16 +1316,19 @@ class Response(object):
                                 start, end, self.content_length)
                             self.content_length = (end - start)
                             return [body[start:end]]
-                    # 如果存在多个合理的区间范围
+                    # 2.3.2、如果存在多个合理的区间范围
                     elif range_size > 1:
+                        # 如果存在应用迭代器，且有迭代数据的接口，则从迭代器中读取数据，网络数据就是这种方式
                         if app_iter and hasattr(app_iter, 'app_iter_ranges'):
                             self.status = 206
+                            # 为响应多区间做准备，设置格式化后的数据大小self.content_length以及self.content_type
                             content_size, content_type = \
                                 self._prepare_for_ranges(ranges)
                             return app_iter.app_iter_ranges(ranges,
                                                             content_type,
                                                             self.boundary,
                                                             content_size)
+                        # 如果没有迭代器，但是有数据body，则直接从body截取数据
                         elif body:
                             self.status = 206
                             content_size, content_type, = \
@@ -1336,10 +1341,10 @@ class Response(object):
                                                         content_size,
                                                         _body_slicer)
 
-        # 3、如果存在应用程序迭代器，就返回该迭代器
+        # 3、对于无区间范围的请求，如果存在应用程序迭代器，就返回该迭代器
         if app_iter:
             return app_iter
-        # 4、如果不存在应用程序迭代器，但有body数据，则返回body
+        # 4、对于无区间范围的请求，如果不存在应用程序迭代器，但有body数据，则返回body
         if body is not None:
             return [body]
 
